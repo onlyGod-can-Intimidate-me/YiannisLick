@@ -1,0 +1,955 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Guitar Timing Trainer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+        body {
+            font-family: 'Courier New', monospace;
+            padding: 10px;
+            background: #000;
+            color: white;
+            overflow-x: hidden;
+            transition: background-color 0.15s ease;
+        }
+
+        h2 { margin-bottom: 10px; font-size: 20px; text-align: center; }
+        h3 { margin-bottom: 8px; font-size: 16px; }
+
+        /* ── TAB DISPLAY ── */
+        #tab-display {
+            background: #000;
+            padding: 15px 10px;
+            border: 2px solid #4CAF50;
+            border-radius: 8px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            margin-bottom: 15px;
+            min-height: 150px;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        #tab-content {
+            font-family: 'Courier New', monospace;
+            font-size: 16px;
+            line-height: 1.8;
+            white-space: pre;
+            color: #0f0;
+            display: inline-block;
+        }
+
+        /* Each tab column is wrapped in a span — this is what we highlight */
+        .tab-col { display: inline; }
+        .tab-col.active { color: #000; background: #ffd700; border-radius: 2px; }
+        .tab-col.played { color: #3a3; }
+
+        /* ── SPEED CONTROLS ── */
+        .speed-controls {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+            margin-bottom: 15px;
+        }
+
+        button {
+            padding: 16px 12px;
+            margin: 0;
+            font-size: 15px;
+            cursor: pointer;
+            border: none;
+            border-radius: 8px;
+            background: #4CAF50;
+            color: white;
+            font-weight: bold;
+            touch-action: manipulation;
+            width: 100%;
+        }
+        button:active { transform: scale(0.95); opacity: 0.8; }
+        button:disabled { background: #555; opacity: 0.5; }
+
+        /* ── STATUS ── */
+        #status {
+            padding: 12px;
+            background: #1a1a1a;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border: 2px solid #333;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .info-box {
+            padding: 10px;
+            border-radius: 5px;
+            background: #333;
+            font-size: 13px;
+            text-align: center;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        #mic-status { background: #c62828; grid-column: 1 / -1; }
+        #mic-status.connected { background: #2e7d32; }
+
+        /* ── CONTROLS ── */
+        #controls {
+            background: #1a1a1a;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border: 2px solid #333;
+        }
+
+        .button-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .button-group.single { grid-template-columns: 1fr; }
+
+        .button-group input[type="number"],
+        .button-group input[type="text"] {
+            padding: 14px;
+            font-size: 15px;
+            border-radius: 8px;
+            border: 2px solid #4CAF50;
+            background: #2a2a2a;
+            color: white;
+            width: 100%;
+            text-align: center;
+        }
+
+        /* ── TAB EDITOR ── */
+        #tab-editor {
+            width: 100%;
+            height: 200px;
+            background: #0a0a0a;
+            color: #0f0;
+            border: 2px solid #4CAF50;
+            border-radius: 8px;
+            padding: 12px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            resize: vertical;
+            margin-bottom: 12px;
+        }
+
+        #clear-btn { background: #f44336; margin-bottom: 15px; }
+        #save-btn  { background: #2196F3; }
+        #load-btn  { background: #FF9800; }
+
+        #load-list {
+            background: #1a1a1a;
+            border: 2px solid #4CAF50;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 12px;
+            display: none;
+        }
+
+        .saved-riff {
+            padding: 14px;
+            margin: 8px 0;
+            background: #2a2a2a;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 15px;
+            border: 2px solid transparent;
+        }
+        .saved-riff:active { background: #3a3a3a; border-color: #4CAF50; }
+
+        @media (orientation: landscape) {
+            .speed-controls { grid-template-columns: repeat(4, 1fr); }
+        }
+
+        /* ── FULLSCREEN MODE ── */
+        #fs-btn {
+            position: fixed; top: 10px; right: 10px; z-index: 999;
+            background: #333; color: #fff; border: none;
+            border-radius: 6px; padding: 8px 14px; font-size: 18px;
+            cursor: pointer; opacity: 0.7;
+        }
+        #fs-btn:hover { opacity: 1; }
+
+        body.fs-mode > *:not(#tab-display):not(#fs-btn) { display: none !important; }
+
+        body.fs-mode #tab-display {
+            position: fixed; inset: 0; z-index: 998;
+            margin: 0; border-radius: 0; border: none;
+            min-height: 100vh; height: 100vh;
+            display: flex; align-items: center;
+            padding: 30px 20px 60px;
+            overflow-x: auto;
+        }
+        body.fs-mode #tab-display #tab-content {
+            font-size: 28px;
+            line-height: 2.2;
+        }
+    </style>
+</head>
+<body>
+    <button id="fs-btn" onclick="toggleFS()" title="Fullscreen">⛶</button>
+    <h2>🎸 Guitar Timing Trainer</h2>
+
+    <h3>▶️ Playing:</h3>
+    <div id="tab-display">
+        <div id="tab-content"></div>
+    </div>
+
+    <div class="speed-controls">
+        <button id="play-btn"   style="background:#4CAF50;">▶ PLAY</button>
+        <button id="sound-btn"  style="background:#00BCD4;">🔊 SOUND</button>
+        <button id="slow-btn"   style="background:#2196F3;">🐢 SLOW</button>
+        <button id="medium-btn" style="background:#FF9800;">🚶 MED</button>
+        <button id="normal-btn" style="background:#9C27B0;">🏃 FAST</button>
+        <button id="loop-btn"   style="background:#4CAF50;">🔁 LOOP</button>
+    </div>
+
+    <div id="status">
+        <span class="info-box" id="mic-status">🎤 Mic: OFF</span>
+        <span class="info-box">⏱️ Step <span id="position">0</span></span>
+        <span class="info-box">🎵 <span id="current-note">-</span></span>
+        <span class="info-box">🎤 <span id="detected-note">-</span></span>
+    </div>
+
+    <div id="controls">
+        <div class="button-group">
+            <input type="number" id="bpm-input" value="100" min="40" max="300" placeholder="BPM">
+            <button id="mic-btn">🎤 MIC</button>
+        </div>
+        <div class="button-group">
+            <button id="parse-btn">🔄 UPDATE</button>
+            <button id="stop-btn" disabled>⏹ STOP</button>
+        </div>
+        <div class="button-group single">
+            <input type="text" id="riff-name" placeholder="Name your riff...">
+        </div>
+        <div class="button-group">
+            <button id="save-btn">💾 SAVE</button>
+            <button id="load-btn">📂 LOAD</button>
+        </div>
+    </div>
+
+    <h3>✏️ Edit Tab:</h3>
+    <textarea id="tab-editor">e|------------------------------------------------|
+B|------------------------------------------------|
+G|------------------------------------------------|
+D|---------------0-2-3-2--------------------------|
+A|-------0-1-3----------3-1-0---------------------|
+E|-0-1-3-------------------------3-1-0------------|</textarea>
+    <button id="addbar-btn" style="background:#9C27B0; margin-bottom:8px;">➕ ADD BAR</button>
+    <button id="clear-btn">🗑️ CLEAR</button>
+    <div id="load-list"></div>
+
+    <script>
+    // ─────────────────────────────────────────────
+    //  NOTE / STRING LOOKUP TABLES
+    // ─────────────────────────────────────────────
+    const NOTE_FREQS = {
+        'E2':82.41,'F2':87.31,'F#2':92.50,'G2':98.00,'G#2':103.83,'A2':110.00,'A#2':116.54,'B2':123.47,
+        'C3':130.81,'C#3':138.59,'D3':146.83,'D#3':155.56,'E3':164.81,'F3':174.61,
+        'F#3':185.00,'G3':196.00,'G#3':207.65,'A3':220.00,'A#3':233.08,'B3':246.94,
+        'C4':261.63,'C#4':277.18,'D4':293.66,'D#4':311.13,'E4':329.63,'F4':349.23,
+        'F#4':369.99,'G4':392.00,'G#4':415.30,'A4':440.00,'A#4':466.16,'B4':493.88,
+        'C5':523.25,'C#5':554.37,'D5':587.33,'D#5':622.25,'E5':659.25
+    };
+
+    const STRING_NOTES = {
+        1: ['E4','F4','F#4','G4','G#4','A4','A#4','B4','C5','C#5','D5','D#5','E5'],
+        2: ['B3','C4','C#4','D4','D#4','E4','F4','F#4','G4','G#4','A4','A#4','B4'],
+        3: ['G3','G#3','A3','A#3','B3','C4','C#4','D4','D#4','E4','F4','F#4','G4'],
+        4: ['D3','D#3','E3','F3','F#3','G3','G#3','A3','A#3','B3','C4','C#4','D4'],
+        5: ['A2','A#2','B2','C3','C#3','D3','D#3','E3','F3','F#3','G3','G#3','A3'],
+        6: ['E2','F2','F#2','G2','G#2','A2','A#2','B2','C3','C#3','D3','D#3','E3']
+    };
+
+    // ─────────────────────────────────────────────
+    //  STATE
+    // ─────────────────────────────────────────────
+    let columns      = [];   // parsed columns: [ { chars: ['e','|','-','-',...], notes: [{string,note,freq}] } ]
+    let colSpans     = [];   // parallel array of DOM spans for each content column
+    let bpm          = 100;
+    let speedMult    = 1.0;
+    let isPlaying    = false;
+    let isLooping    = false;
+    let playbackEnabled = true;
+    let currentCol   = -1;
+
+    // Web Audio
+    let audioCtx     = null;
+    let analyser     = null;
+    let scriptProc   = null;
+    let stepTimerId  = null; // setInterval handle
+
+    // Mic
+    let micStream    = null;
+
+    // ─────────────────────────────────────────────
+    //  DOM REFS
+    // ─────────────────────────────────────────────
+    const tabEditor      = document.getElementById('tab-editor');
+    const tabContent     = document.getElementById('tab-content');
+    const tabDisplay     = document.getElementById('tab-display');
+    const playBtn        = document.getElementById('play-btn');
+    const stopBtn        = document.getElementById('stop-btn');
+    const loopBtn        = document.getElementById('loop-btn');
+    const slowBtn        = document.getElementById('slow-btn');
+    const mediumBtn      = document.getElementById('medium-btn');
+    const normalBtn      = document.getElementById('normal-btn');
+    const soundBtn       = document.getElementById('sound-btn');
+    const micBtn         = document.getElementById('mic-btn');
+    const parseBtn       = document.getElementById('parse-btn');
+    const clearBtn       = document.getElementById('clear-btn');
+    const saveBtn        = document.getElementById('save-btn');
+    const loadBtn        = document.getElementById('load-btn');
+    const riffNameInput  = document.getElementById('riff-name');
+    const loadList       = document.getElementById('load-list');
+    const bpmInput       = document.getElementById('bpm-input');
+    const micStatus      = document.getElementById('mic-status');
+    const positionSpan   = document.getElementById('position');
+    const currentNoteSpan= document.getElementById('current-note');
+    const detectedNoteSpan = document.getElementById('detected-note');
+
+    // ─────────────────────────────────────────────
+    //  PARSE TAB → COLUMNS
+    //
+    //  A "column" = one character-position across all 6 strings.
+    //  We skip the "e|", "B|" prefix (first 2 chars of each line).
+    //  Each column stores which notes (if any) are at that position.
+    // ─────────────────────────────────────────────
+    function parseAndRender(tabText) {
+        const stringOrder = ['e','B','G','D','A','E'];
+        const stringMap = { 'e':1,'B':2,'G':3,'D':4,'A':5,'E':6 };
+
+        // Split into all lines
+        const rawLines = tabText.split('\n');
+
+        // Collect only tab lines (contain dashes), ignore everything else
+        // Group them into slabs of 6
+        const tabLines = rawLines.filter(l => l.includes('-'));
+
+        // Build slabs — every 6 consecutive tab lines = one slab
+        const slabs = [];
+        for (let i = 0; i + 5 < tabLines.length; i += 6) {
+            slabs.push(tabLines.slice(i, i + 6));
+        }
+
+        if (slabs.length === 0) return;
+
+        // Merge all slabs: concatenate each string row across all slabs
+        // Strip leading string labels if present e.g. "e|" or "B|"
+        const mergedStrings = ['','','','','',''];
+        slabs.forEach(slab => {
+            slab.forEach((line, si) => {
+                // Strip optional string label prefix like "e|" "B|" or just leading "|"
+                const stripped = line.replace(/^[eEBGDA]\|/, '').replace(/^\|/, '').replace(/\|$/, '');
+                mergedStrings[si] += stripped + '|';
+            });
+        });
+
+        // Rebuild as labeled tab text for the existing parser logic below
+        const labeledText = mergedStrings.map((content, i) =>
+            stringOrder[i] + '|' + content
+        ).join('\n');
+
+        // Now parse the merged labeled tab
+        const lines = labeledText.split('\n').filter(l => l.trim());
+
+        // Build per-string char arrays (excluding the "X|" prefix)
+        const stringLines = {};
+        let maxLen = 0;
+
+        lines.forEach(line => {
+            const m = line.match(/^([eEBGDA])\|(.*)/);
+            if (!m) return;
+            const sName = m[1];
+            const sNum  = stringMap[sName] ?? stringMap[sName.toLowerCase()];
+            if (!sNum) return;
+            const chars = m[2].replace(/\|$/, '').split('');
+            stringLines[sNum] = chars;
+            if (chars.length > maxLen) maxLen = chars.length;
+        });
+
+        if (Object.keys(stringLines).length === 0) return;
+
+        // Walk column by column, skip 2-digit fret second char
+        columns = [];
+        const skipCol = new Set(); // columns that are the 2nd digit of a 2-digit fret
+
+        // First pass: mark 2nd digits so we can merge them
+        for (let c = 0; c < maxLen; c++) {
+            for (let s = 1; s <= 6; s++) {
+                const chars = stringLines[s];
+                if (!chars) continue;
+                const ch = chars[c];
+                if (ch >= '0' && ch <= '9') {
+                    const prev = c > 0 ? chars[c - 1] : null;
+                    if (prev >= '0' && prev <= '9') {
+                        skipCol.add(c); // this col is 2nd digit on at least one string
+                    }
+                }
+            }
+        }
+
+        // Second pass: build columns
+        for (let c = 0; c < maxLen; c++) {
+            if (skipCol.has(c)) continue;
+
+            const colNotes = [];
+            for (let s = 1; s <= 6; s++) {
+                const chars = stringLines[s];
+                if (!chars) continue;
+                let ch = chars[c] ?? '-';
+
+                // Check for 2-digit fret
+                if (ch >= '0' && ch <= '9' && !skipCol.has(c + 1)) {
+                    const next = chars[c + 1];
+                    if (next >= '0' && next <= '9') {
+                        ch = ch + next;
+                    }
+                }
+
+                if (ch !== '-' && ch !== '|' && ch !== ' ') {
+                    const fret = parseInt(ch);
+                    if (!isNaN(fret)) {
+                        const noteName = STRING_NOTES[s]?.[fret];
+                        if (noteName) {
+                            colNotes.push({ string: s, fret, note: noteName, freq: NOTE_FREQS[noteName] });
+                        }
+                    }
+                }
+            }
+
+            columns.push({ index: columns.length, notes: colNotes });
+        }
+
+        renderTab(lines, stringLines, maxLen);
+    }
+
+    // ─────────────────────────────────────────────
+    //  RENDER TAB AS COLUMN-SPANS
+    //
+    //  We render the tab line by line, wrapping each
+    //  content character in a .tab-col span so we can
+    //  highlight whole columns by index.
+    //
+    //  We store refs in colSpans[colIndex] = [span, span, ...] (one per string row)
+    // ─────────────────────────────────────────────
+    function renderTab(lines, stringLines, maxLen) {
+        tabContent.innerHTML = '';
+        colSpans = [];
+
+        // Build a mapping: column index → which raw char positions to span
+        // (accounting for skipped 2nd-digit columns)
+        const colRawPos = []; // colRawPos[colIdx] = raw char position c
+        const skipCol = new Set();
+
+        // Recompute skip set (same logic as parse)
+        for (let c = 0; c < maxLen; c++) {
+            for (let s = 1; s <= 6; s++) {
+                const chars = stringLines[s];
+                if (!chars) continue;
+                const ch = chars[c];
+                if (ch >= '0' && ch <= '9') {
+                    const prev = c > 0 ? chars[c - 1] : null;
+                    if (prev >= '0' && prev <= '9') skipCol.add(c);
+                }
+            }
+        }
+        for (let c = 0; c < maxLen; c++) {
+            if (!skipCol.has(c)) colRawPos.push(c);
+        }
+
+        // Initialise span arrays
+        for (let i = 0; i < columns.length; i++) colSpans.push([]);
+
+        lines.forEach(line => {
+            const m = line.match(/^([eEBGDA])\|(.*)/);
+            if (!m) {
+                // Non-tab line — just text node
+                tabContent.appendChild(document.createTextNode(line + '\n'));
+                return;
+            }
+
+            const sName = m[1];
+            const stringMap = { 'e':1,'B':2,'G':3,'D':4,'A':5,'E':6 };
+            const sNum = stringMap[sName] ?? stringMap[sName.toLowerCase()];
+            const chars = stringLines[sNum] ?? [];
+            const trailingBar = m[2].endsWith('|') ? '|' : '';
+
+            // Prefix: "e|"
+            tabContent.appendChild(document.createTextNode(sName + '|'));
+
+            let colIdx = 0;
+            for (let c = 0; c < maxLen; c++) {
+                const ch = chars[c] ?? '-';
+
+                if (skipCol.has(c)) {
+                    // 2nd digit of 2-digit fret — absorb into previous span
+                    const prevColIdx = colIdx - 1;
+                    if (prevColIdx >= 0 && colSpans[prevColIdx]) {
+                        const existingSpan = colSpans[prevColIdx][colSpans[prevColIdx].length - 1];
+                        if (existingSpan) existingSpan.textContent += ch;
+                    }
+                    continue;
+                }
+
+                const span = document.createElement('span');
+                span.className = 'tab-col';
+                span.dataset.col = colIdx;
+
+                // Determine display char
+                let displayCh = ch;
+                if (ch >= '0' && ch <= '9' && colIdx + 1 < colRawPos.length) {
+                    const nextRaw = colRawPos[colIdx + 1] ?? -1;
+                    if (nextRaw > 0 && skipCol.has(nextRaw)) {
+                        displayCh = ch + (chars[nextRaw] ?? '');
+                    }
+                }
+                span.textContent = displayCh;
+
+                if (colSpans[colIdx]) colSpans[colIdx].push(span);
+                tabContent.appendChild(span);
+                colIdx++;
+            }
+
+            if (trailingBar) tabContent.appendChild(document.createTextNode('|'));
+            tabContent.appendChild(document.createTextNode('\n'));
+        });
+    }
+
+    function updateDisplay() {
+        parseAndRender(tabEditor.value);
+    }
+
+    // ─────────────────────────────────────────────
+    //  AUDIO — ensure context exists
+    // ─────────────────────────────────────────────
+    function ensureAudioCtx() {
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        return audioCtx;
+    }
+
+    function playNoteNow(freq, duration) {
+        if (!playbackEnabled || !freq) return;
+        const ctx = ensureAudioCtx();
+        const now = ctx.currentTime;
+
+        const osc  = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.value = freq;
+
+        gain.gain.setValueAtTime(0, now);
+        gain.gain.linearRampToValueAtTime(0.8, now + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.4, now + 0.08);
+        gain.gain.exponentialRampToValueAtTime(0.2, now + duration);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + duration + 0.08);
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + duration + 0.1);
+    }
+
+    // ─────────────────────────────────────────────
+    //  STEP SEQUENCER
+    //
+    //  This is the core new approach.
+    //  One setInterval tick = one column advance.
+    //  At each tick:
+    //    1. Unhighlight previous column
+    //    2. Highlight new column
+    //    3. Play any notes in this column RIGHT NOW
+    //    4. Auto-scroll the display to keep active col visible
+    //
+    //  Interval duration = (60 / bpm) / 2 * speedMult
+    //  (2 dashes = 1 beat in standard tab)
+    // ─────────────────────────────────────────────
+    function stepIntervalMs() {
+        // 2 columns per beat, adjusted for speed
+        return (60 / bpm) * 500 / speedMult;
+    }
+
+    function highlightColumn(idx) {
+        // Clear previous
+        if (currentCol >= 0 && colSpans[currentCol]) {
+            colSpans[currentCol].forEach(s => {
+                s.classList.remove('active');
+                s.classList.add('played');
+            });
+        }
+
+        currentCol = idx;
+        if (idx < 0 || !colSpans[idx]) return;
+
+        colSpans[idx].forEach(s => {
+            s.classList.remove('played');
+            s.classList.add('active');
+        });
+
+        // Auto-scroll to keep highlighted column in view
+        const firstSpan = colSpans[idx][0];
+        if (firstSpan) {
+            const containerRect = tabDisplay.getBoundingClientRect();
+            const spanRect = firstSpan.getBoundingClientRect();
+            const spanLeft = spanRect.left - containerRect.left + tabDisplay.scrollLeft;
+            const target = spanLeft - containerRect.width * 0.3;
+            tabDisplay.scrollTo({ left: Math.max(0, target), behavior: 'smooth' });
+        }
+    }
+
+    function clearAllHighlights() {
+        colSpans.forEach(spans => {
+            spans.forEach(s => {
+                s.classList.remove('active', 'played');
+            });
+        });
+        currentCol = -1;
+    }
+
+    function stepForward() {
+        const nextCol = currentCol + 1;
+
+        if (nextCol >= columns.length) {
+            if (isLooping) {
+                clearAllHighlights();
+                // Don't call stepForward immediately — let the interval do it next tick
+                currentCol = -1;
+                return;
+            } else {
+                stop();
+                return;
+            }
+        }
+
+        highlightColumn(nextCol);
+
+        const col = columns[nextCol];
+        const noteDuration = stepIntervalMs() / 1000 * 1.5; // notes ring slightly longer than one step
+
+        if (col.notes.length > 0) {
+            col.notes.forEach(n => playNoteNow(n.freq, noteDuration));
+
+            // Update current note display
+            const noteNames = col.notes.map(n => n.note).join(', ');
+            currentNoteSpan.textContent = noteNames;
+
+            // Tell mic what to expect
+            if (micStream) setExpectedNotes(col.notes);
+
+
+        } else {
+            currentNoteSpan.textContent = '-';
+        }
+
+        positionSpan.textContent = nextCol + 1;
+    }
+
+    function play() {
+        if (columns.length === 0) {
+            alert('Please update the tab first!');
+            return;
+        }
+
+        ensureAudioCtx();
+        clearAllHighlights();
+        currentCol = -1;
+        isPlaying = true;
+        playBtn.disabled = true;
+        stopBtn.disabled = false;
+
+        // Fire immediately so there's no gap, then on interval
+        stepForward();
+        stepTimerId = setInterval(stepForward, stepIntervalMs());
+    }
+
+    function stop() {
+        isPlaying = false;
+        if (stepTimerId) { clearInterval(stepTimerId); stepTimerId = null; }
+        clearAllHighlights();
+        playBtn.disabled = false;
+        stopBtn.disabled = true;
+        currentNoteSpan.textContent = '-';
+        detectedNoteSpan.textContent = '-';
+        positionSpan.textContent = '0';
+        document.body.style.backgroundColor = '#000';
+        currentExpectedNotes = [];
+        tabDisplay.scrollTo({ left: 0, behavior: 'smooth' });
+    }
+
+    // ─────────────────────────────────────────────
+    //  MICROPHONE & PITCH DETECTION
+    // ─────────────────────────────────────────────
+    async function initMicrophone() {
+        try {
+            micStatus.textContent = '🎤 Requesting...';
+            ensureAudioCtx();
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 2048;
+
+            micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const mic = audioCtx.createMediaStreamSource(micStream);
+            scriptProc = audioCtx.createScriptProcessor(2048, 1, 1);
+
+            mic.connect(analyser);
+            analyser.connect(scriptProc);
+            scriptProc.connect(audioCtx.destination);
+            scriptProc.onaudioprocess = processAudio;
+
+            micStatus.textContent = '🎤 Connected ✔';
+            micStatus.classList.add('connected');
+            micBtn.disabled = true;
+        } catch (err) {
+            micStatus.textContent = '🎤 ERROR: ' + err.message;
+        }
+    }
+
+    function autoCorrelate(buffer, sampleRate) {
+        const SIZE = buffer.length;
+        const MAX_SAMPLES = Math.floor(SIZE / 2);
+        let best_offset = -1, best_correlation = 0;
+        let rms = 0;
+        for (let i = 0; i < SIZE; i++) rms += buffer[i] * buffer[i];
+        rms = Math.sqrt(rms / SIZE);
+        if (rms < 0.01) return -1;
+
+        let lastCorrelation = 1;
+        for (let offset = 1; offset < MAX_SAMPLES; offset++) {
+            let correlation = 0;
+            for (let i = 0; i < MAX_SAMPLES; i++) {
+                correlation += Math.abs(buffer[i] - buffer[i + offset]);
+            }
+            correlation = 1 - correlation / MAX_SAMPLES;
+            if (correlation > 0.9 && correlation > lastCorrelation && correlation > best_correlation) {
+                best_correlation = correlation;
+                best_offset = offset;
+            }
+            lastCorrelation = correlation;
+        }
+        return best_correlation > 0.01 ? sampleRate / best_offset : -1;
+    }
+
+    function getClosestNote(freq) {
+        if (freq < 0) return null;
+        let closest = null, minDiff = Infinity;
+        for (const [note, noteFreq] of Object.entries(NOTE_FREQS)) {
+            const diff = Math.abs(freq - noteFreq);
+            if (diff < minDiff) { minDiff = diff; closest = note; }
+        }
+        return minDiff < NOTE_FREQS[closest] * 0.06 ? closest : null;
+    }
+
+    let currentExpectedNotes = [];
+    let graceUntil = 0;
+    let wrongFrames = 0;        // consecutive wrong-note frames
+    const WRONG_THRESHOLD = 4;  // must be wrong this many frames in a row before going red
+
+    function setExpectedNotes(notes) {
+        currentExpectedNotes = notes;
+        graceUntil = performance.now() + 120;
+        wrongFrames = 0;
+    }
+
+    function processAudio() {
+        const buffer = new Float32Array(analyser.fftSize);
+        analyser.getFloatTimeDomainData(buffer);
+
+        let rms = 0;
+        for (let i = 0; i < buffer.length; i++) rms += buffer[i] * buffer[i];
+        rms = Math.sqrt(rms / buffer.length);
+
+        if (rms > 0.01) {
+            const freq = autoCorrelate(buffer, audioCtx.sampleRate);
+            const detected = getClosestNote(freq);
+            detectedNoteSpan.textContent = detected ?? 'sound';
+
+            // Still in grace window after step advance — stay black
+            if (performance.now() < graceUntil) {
+                wrongFrames = 0;
+                document.body.style.backgroundColor = '#000';
+                return;
+            }
+
+            if (detected && currentExpectedNotes.length > 0) {
+                const correct = currentExpectedNotes.some(n => n.note === detected);
+                if (correct) {
+                    wrongFrames = 0;
+                    document.body.style.backgroundColor = '#003300';
+                } else {
+                    wrongFrames++;
+                    // Only go red once we've seen wrong note consistently
+                    if (wrongFrames >= WRONG_THRESHOLD) {
+                        document.body.style.backgroundColor = '#CC0000';
+                    }
+                }
+            } else {
+                wrongFrames = 0;
+                document.body.style.backgroundColor = '#000';
+            }
+        } else {
+            wrongFrames = 0;
+            detectedNoteSpan.textContent = '-';
+            document.body.style.backgroundColor = '#000';
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    //  SPEED BUTTONS — restart if playing
+    // ─────────────────────────────────────────────
+    function setSpeed(mult, activeBtn) {
+        speedMult = mult;
+        [slowBtn, mediumBtn, normalBtn].forEach(b => b.style.opacity = '0.6');
+        activeBtn.style.opacity = '1';
+
+        if (isPlaying) {
+            // Restart interval at new speed without resetting column
+            clearInterval(stepTimerId);
+            stepTimerId = setInterval(stepForward, stepIntervalMs());
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    //  SAVE / LOAD
+    // ─────────────────────────────────────────────
+    async function saveRiff() {
+        const name = riffNameInput.value.trim();
+        if (!name) { alert('Please enter a riff name!'); return; }
+        try {
+            const res = await fetch('/save-tab', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, tab: tabEditor.value, bpm })
+            });
+            const result = await res.json();
+            alert(result.ok ? `✔ Saved: ${name}` : 'Failed to save');
+        } catch (e) { alert('Failed to save: ' + e.message); }
+    }
+
+    async function loadRiffs() {
+        try {
+            const res  = await fetch('/load-tabs');
+            const data = await res.json();
+            loadList.innerHTML = '<h3>📂 Saved Riffs:</h3>';
+            if (!data.riffs?.length) {
+                loadList.innerHTML += '<p style="color:#888">No saved riffs yet!</p>';
+            } else {
+                data.riffs.forEach(riff => {
+                    const div = document.createElement('div');
+                    div.className = 'saved-riff';
+                    div.textContent = `🎸 ${riff.name} (${riff.bpm} BPM)`;
+                    div.onclick = () => {
+                        tabEditor.value = riff.tab;
+                        bpmInput.value  = riff.bpm;
+                        bpm = riff.bpm;
+                        updateDisplay();
+                        loadList.style.display = 'none';
+                    };
+                    loadList.appendChild(div);
+                });
+            }
+            loadList.style.display = 'block';
+        } catch (e) { alert('Failed to load: ' + e.message); }
+    }
+
+    function clearTab() {
+        if (confirm('Clear the tab editor?')) {
+            tabEditor.value = `e|------------------------------------------------|
+B|------------------------------------------------|
+G|------------------------------------------------|
+D|------------------------------------------------|
+A|------------------------------------------------|
+E|------------------------------------------------|`;
+            updateDisplay();
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    //  EVENT LISTENERS
+    // ─────────────────────────────────────────────
+    playBtn.addEventListener('click', play);
+    stopBtn.addEventListener('click', stop);
+    micBtn.addEventListener('click', initMicrophone);
+    parseBtn.addEventListener('click', updateDisplay);
+    clearBtn.addEventListener('click', clearTab);
+    document.getElementById('addbar-btn').addEventListener('click', addBar);
+
+    function addBar() {
+        const EMPTY_BAR = '--------------------------------|';
+        const lines = tabEditor.value.split('\n').filter(l => l.trim());
+        const updated = lines.map(line => line.replace(/\|$/, '') + EMPTY_BAR);
+        tabEditor.value = updated.join('\n');
+        updateDisplay();
+    }
+    saveBtn.addEventListener('click', saveRiff);
+    loadBtn.addEventListener('click', loadRiffs);
+
+    slowBtn.addEventListener('click',   () => setSpeed(0.5,  slowBtn));
+    mediumBtn.addEventListener('click', () => setSpeed(0.75, mediumBtn));
+    normalBtn.addEventListener('click', () => setSpeed(1.0,  normalBtn));
+
+    soundBtn.addEventListener('click', () => {
+        playbackEnabled = !playbackEnabled;
+        soundBtn.textContent = playbackEnabled ? '🔊 SOUND' : '🔇 MUTE';
+        soundBtn.style.background = playbackEnabled ? '#00BCD4' : '#666';
+    });
+
+    loopBtn.addEventListener('click', () => {
+        isLooping = !isLooping;
+        loopBtn.textContent = isLooping ? '🔁 ON' : '🔁 OFF';
+        loopBtn.style.background = isLooping ? '#FF9800' : '#4CAF50';
+    });
+
+    bpmInput.addEventListener('change', () => {
+        bpm = parseInt(bpmInput.value) || 100;
+        if (isPlaying) {
+            clearInterval(stepTimerId);
+            stepTimerId = setInterval(stepForward, stepIntervalMs());
+        }
+    });
+
+    // Init
+    updateDisplay();
+
+    // ── FULLSCREEN ──
+    function toggleFS() {
+        const btn = document.getElementById('fs-btn');
+        if (!document.body.classList.contains('fs-mode')) {
+            // Enter fullscreen
+            document.body.classList.add('fs-mode');
+            btn.textContent = '✕';
+            btn.title = 'Exit fullscreen';
+            // Try native fullscreen too (Android Chrome supports it)
+            if (document.documentElement.requestFullscreen) {
+                document.documentElement.requestFullscreen().catch(() => {});
+            }
+        } else {
+            // Exit fullscreen
+            document.body.classList.remove('fs-mode');
+            btn.textContent = '⛶';
+            btn.title = 'Fullscreen';
+            if (document.exitFullscreen && document.fullscreenElement) {
+                document.exitFullscreen().catch(() => {});
+            }
+        }
+    }
+
+    // Also exit fs-mode if user presses Escape
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') {
+            document.body.classList.remove('fs-mode');
+            document.getElementById('fs-btn').textContent = '⛶';
+        }
+    });
+    </script>
+</body>
+</html>
