@@ -19,32 +19,29 @@
         h2 { margin-bottom: 10px; font-size: 20px; text-align: center; }
         h3 { margin-bottom: 8px; font-size: 16px; }
 
-        /* ── TAB DISPLAY ── */
-        #tab-display {
-            background: #000;
-            padding: 15px 10px;
-            border: 2px solid #4CAF50;
-            border-radius: 8px;
-            overflow-x: auto;
-            overflow-y: hidden;
+        /* ── CANVAS DISPLAY ── */
+        #canvas-wrap {
+            position: relative;
             margin-bottom: 15px;
-            min-height: 150px;
-            -webkit-overflow-scrolling: touch;
+            border: 2px solid #222;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #0a0a0a;
         }
-
-        #tab-content {
-            font-family: 'Courier New', monospace;
-            font-size: 16px;
-            line-height: 1.8;
-            white-space: pre;
-            color: #0f0;
-            display: inline-block;
+        #guitar-canvas {
+            display: block;
+            width: 100%;
+            height: 300px;
         }
-
-        /* Each tab column is wrapped in a span — this is what we highlight */
-        .tab-col { display: inline; }
-        .tab-col.active { color: #000; background: #ffd700; border-radius: 2px; }
-        .tab-col.played { color: #3a3; }
+        #feedback-text {
+            position: absolute;
+            top: 50%; left: 30%;
+            transform: translate(-50%, -50%);
+            font-size: 22px; font-weight: bold;
+            color: #fff; letter-spacing: .2em;
+            pointer-events: none;
+            opacity: 0; transition: opacity .1s;
+        }
 
         /* ── SPEED CONTROLS ── */
         .speed-controls {
@@ -177,20 +174,12 @@
         }
         #fs-btn:hover { opacity: 1; }
 
-        body.fs-mode > *:not(#tab-display):not(#fs-btn) { display: none !important; }
-
-        body.fs-mode #tab-display {
+        body.fs-mode > *:not(#canvas-wrap):not(#fs-btn) { display: none !important; }
+        body.fs-mode #canvas-wrap {
             position: fixed; inset: 0; z-index: 998;
             margin: 0; border-radius: 0; border: none;
-            min-height: 100vh; height: 100vh;
-            display: flex; align-items: center;
-            padding: 30px 20px 60px;
-            overflow-x: auto;
         }
-        body.fs-mode #tab-display #tab-content {
-            font-size: 28px;
-            line-height: 2.2;
-        }
+        body.fs-mode #guitar-canvas { height: 100vh; }
     </style>
 </head>
 <body>
@@ -198,8 +187,9 @@
     <h2>🎸 Guitar Timing Trainer</h2>
 
     <h3>▶️ Playing:</h3>
-    <div id="tab-display">
-        <div id="tab-content"></div>
+    <div id="canvas-wrap">
+        <canvas id="guitar-canvas"></canvas>
+        <div id="feedback-text"></div>
     </div>
 
     <div class="speed-controls">
@@ -237,19 +227,12 @@
     </div>
 
     <h3>✏️ Edit Tab:</h3>
-    <textarea id="tab-editor">|-------------0-----------------------0-------------------2---2-------------------1---1-----------|
-|---------1-------1---------------1-------1-------------3---------3-------------1---------1-------|
-|-------2-------------0---------0-------------0-------2---------------0-------2---------------0---|
-|-----2-----------------------2-------------------0-----------------------3-----------------------|
-|-0-----------------------3-----------------------------------------------------------------------|
-|-------------------------------------------------------------------------------------------------|
-
-|-----------0-0-----------------------0-----------------------0-----------------------0-----------|
-|---------1-------1----------------(0)----0---------------1-------1-----------------0-----0-------|
-|-------2-------------0-----------1-----------0---------2-------------0-----------1---------------|
-|-----2-------------------------2---------------------2-------------------------2-----------------|
-|-0---------------------------2-------------------0---------------------------2-------------------|
-|-------------------------0-----------------------------------------------0-----------------------|</textarea>
+    <textarea id="tab-editor">e|------------------------------------------------|
+B|------------------------------------------------|
+G|------------------------------------------------|
+D|---------------0-2-3-2--------------------------|
+A|-------0-1-3----------3-1-0---------------------|
+E|-0-1-3-------------------------3-1-0------------|</textarea>
     <button id="addbar-btn" style="background:#9C27B0; margin-bottom:8px;">➕ ADD BAR</button>
     <button id="clear-btn">🗑️ CLEAR</button>
     <div id="load-list"></div>
@@ -276,23 +259,34 @@
         6: ['E2','F2','F#2','G2','G#2','A2','A#2','B2','C3','C#3','D3','D#3','E3']
     };
 
+    const STRING_COLORS = ['#4CAF50','#9C27B0','#FF9800','#2196F3','#00BCD4','#f44336'];
+    const STRING_LABELS = ['e','B','G','D','A','E'];
+
     // ─────────────────────────────────────────────
     //  STATE
     // ─────────────────────────────────────────────
-    let columns      = [];   // parsed columns: [ { chars: ['e','|','-','-',...], notes: [{string,note,freq}] } ]
-    let colSpans     = [];   // parallel array of DOM spans for each content column
-    let bpm          = 300;
+    let columns      = [];
+    let bpm          = 100;
     let speedMult    = 1.0;
     let isPlaying    = false;
     let isLooping    = false;
     let playbackEnabled = true;
     let currentCol   = -1;
 
+    // Canvas
+    let canvas, canvasCtx;
+    let pills        = [];
+    let startTime    = null;
+    let rafId        = null;
+    let lastTriggeredCol = -1;
+
+    // Parabolic bomb ball — one per upcoming note
+    let activeBombs = []; // { targetLane, launchTime, landTime, color }
+
     // Web Audio
     let audioCtx     = null;
     let analyser     = null;
     let scriptProc   = null;
-    let stepTimerId  = null; // setInterval handle
 
     // Mic
     let micStream    = null;
@@ -300,28 +294,27 @@
     // ─────────────────────────────────────────────
     //  DOM REFS
     // ─────────────────────────────────────────────
-    const tabEditor      = document.getElementById('tab-editor');
-    const tabContent     = document.getElementById('tab-content');
-    const tabDisplay     = document.getElementById('tab-display');
-    const playBtn        = document.getElementById('play-btn');
-    const stopBtn        = document.getElementById('stop-btn');
-    const loopBtn        = document.getElementById('loop-btn');
-    const slowBtn        = document.getElementById('slow-btn');
-    const mediumBtn      = document.getElementById('medium-btn');
-    const normalBtn      = document.getElementById('normal-btn');
-    const soundBtn       = document.getElementById('sound-btn');
-    const micBtn         = document.getElementById('mic-btn');
-    const parseBtn       = document.getElementById('parse-btn');
-    const clearBtn       = document.getElementById('clear-btn');
-    const saveBtn        = document.getElementById('save-btn');
-    const loadBtn        = document.getElementById('load-btn');
-    const riffNameInput  = document.getElementById('riff-name');
-    const loadList       = document.getElementById('load-list');
-    const bpmInput       = document.getElementById('bpm-input');
-    const micStatus      = document.getElementById('mic-status');
-    const positionSpan   = document.getElementById('position');
-    const currentNoteSpan= document.getElementById('current-note');
-    const detectedNoteSpan = document.getElementById('detected-note');
+    const tabEditor       = document.getElementById('tab-editor');
+    const playBtn         = document.getElementById('play-btn');
+    const stopBtn         = document.getElementById('stop-btn');
+    const loopBtn         = document.getElementById('loop-btn');
+    const slowBtn         = document.getElementById('slow-btn');
+    const mediumBtn       = document.getElementById('medium-btn');
+    const normalBtn       = document.getElementById('normal-btn');
+    const soundBtn        = document.getElementById('sound-btn');
+    const micBtn          = document.getElementById('mic-btn');
+    const parseBtn        = document.getElementById('parse-btn');
+    const clearBtn        = document.getElementById('clear-btn');
+    const saveBtn         = document.getElementById('save-btn');
+    const loadBtn         = document.getElementById('load-btn');
+    const riffNameInput   = document.getElementById('riff-name');
+    const loadList        = document.getElementById('load-list');
+    const bpmInput        = document.getElementById('bpm-input');
+    const micStatus       = document.getElementById('mic-status');
+    const positionSpan    = document.getElementById('position');
+    const currentNoteSpan = document.getElementById('current-note');
+    const detectedNoteSpan= document.getElementById('detected-note');
+    const feedbackText    = document.getElementById('feedback-text');
 
     // ─────────────────────────────────────────────
     //  PARSE TAB → COLUMNS
@@ -436,99 +429,7 @@
             columns.push({ index: columns.length, notes: colNotes });
         }
 
-        renderTab(lines, stringLines, maxLen);
-    }
-
-    // ─────────────────────────────────────────────
-    //  RENDER TAB AS COLUMN-SPANS
-    //
-    //  We render the tab line by line, wrapping each
-    //  content character in a .tab-col span so we can
-    //  highlight whole columns by index.
-    //
-    //  We store refs in colSpans[colIndex] = [span, span, ...] (one per string row)
-    // ─────────────────────────────────────────────
-    function renderTab(lines, stringLines, maxLen) {
-        tabContent.innerHTML = '';
-        colSpans = [];
-
-        // Build a mapping: column index → which raw char positions to span
-        // (accounting for skipped 2nd-digit columns)
-        const colRawPos = []; // colRawPos[colIdx] = raw char position c
-        const skipCol = new Set();
-
-        // Recompute skip set (same logic as parse)
-        for (let c = 0; c < maxLen; c++) {
-            for (let s = 1; s <= 6; s++) {
-                const chars = stringLines[s];
-                if (!chars) continue;
-                const ch = chars[c];
-                if (ch >= '0' && ch <= '9') {
-                    const prev = c > 0 ? chars[c - 1] : null;
-                    if (prev >= '0' && prev <= '9') skipCol.add(c);
-                }
-            }
-        }
-        for (let c = 0; c < maxLen; c++) {
-            if (!skipCol.has(c)) colRawPos.push(c);
-        }
-
-        // Initialise span arrays
-        for (let i = 0; i < columns.length; i++) colSpans.push([]);
-
-        lines.forEach(line => {
-            const m = line.match(/^([eEBGDA])\|(.*)/);
-            if (!m) {
-                // Non-tab line — just text node
-                tabContent.appendChild(document.createTextNode(line + '\n'));
-                return;
-            }
-
-            const sName = m[1];
-            const stringMap = { 'e':1,'B':2,'G':3,'D':4,'A':5,'E':6 };
-            const sNum = stringMap[sName] ?? stringMap[sName.toLowerCase()];
-            const chars = stringLines[sNum] ?? [];
-            const trailingBar = m[2].endsWith('|') ? '|' : '';
-
-            // Prefix: "e|"
-            tabContent.appendChild(document.createTextNode(sName + '|'));
-
-            let colIdx = 0;
-            for (let c = 0; c < maxLen; c++) {
-                const ch = chars[c] ?? '-';
-
-                if (skipCol.has(c)) {
-                    // 2nd digit of 2-digit fret — absorb into previous span
-                    const prevColIdx = colIdx - 1;
-                    if (prevColIdx >= 0 && colSpans[prevColIdx]) {
-                        const existingSpan = colSpans[prevColIdx][colSpans[prevColIdx].length - 1];
-                        if (existingSpan) existingSpan.textContent += ch;
-                    }
-                    continue;
-                }
-
-                const span = document.createElement('span');
-                span.className = 'tab-col';
-                span.dataset.col = colIdx;
-
-                // Determine display char
-                let displayCh = ch;
-                if (ch >= '0' && ch <= '9' && colIdx + 1 < colRawPos.length) {
-                    const nextRaw = colRawPos[colIdx + 1] ?? -1;
-                    if (nextRaw > 0 && skipCol.has(nextRaw)) {
-                        displayCh = ch + (chars[nextRaw] ?? '');
-                    }
-                }
-                span.textContent = displayCh;
-
-                if (colSpans[colIdx]) colSpans[colIdx].push(span);
-                tabContent.appendChild(span);
-                colIdx++;
-            }
-
-            if (trailingBar) tabContent.appendChild(document.createTextNode('|'));
-            tabContent.appendChild(document.createTextNode('\n'));
-        });
+        renderCanvas();
     }
 
     function updateDisplay() {
@@ -536,162 +437,373 @@
     }
 
     // ─────────────────────────────────────────────
-    //  AUDIO — ensure context exists
+    //  CANVAS INIT
     // ─────────────────────────────────────────────
-    function ensureAudioCtx() {
-        if (!audioCtx) {
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        }
-        if (audioCtx.state === 'suspended') audioCtx.resume();
-        return audioCtx;
+    function initCanvas() {
+        canvas = document.getElementById('guitar-canvas');
+        canvasCtx = canvas.getContext('2d');
+        resizeCanvas();
+        window.addEventListener('resize', () => { resizeCanvas(); if (!isPlaying) renderCanvas(); });
     }
 
-    function playNoteNow(freq, duration) {
-        if (!playbackEnabled || !freq) return;
-        const ctx = ensureAudioCtx();
-        const now = ctx.currentTime;
-
-        const osc  = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'triangle';
-        osc.frequency.value = freq;
-
-        gain.gain.setValueAtTime(0, now);
-        gain.gain.linearRampToValueAtTime(0.8, now + 0.01);
-        gain.gain.exponentialRampToValueAtTime(0.4, now + 0.08);
-        gain.gain.exponentialRampToValueAtTime(0.2, now + duration);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + duration + 0.08);
-
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(now);
-        osc.stop(now + duration + 0.1);
+    function resizeCanvas() {
+        canvas.width  = canvas.offsetWidth  || 600;
+        canvas.height = canvas.offsetHeight || 220;
     }
 
     // ─────────────────────────────────────────────
-    //  STEP SEQUENCER
-    //
-    //  This is the core new approach.
-    //  One setInterval tick = one column advance.
-    //  At each tick:
-    //    1. Unhighlight previous column
-    //    2. Highlight new column
-    //    3. Play any notes in this column RIGHT NOW
-    //    4. Auto-scroll the display to keep active col visible
-    //
-    //  Interval duration = (60 / bpm) / 2 * speedMult
-    //  (2 dashes = 1 beat in standard tab)
+    //  PILL BUILDER
+    //  Each note column gets a pill per string note.
+    //  Pill width = time until next note column.
     // ─────────────────────────────────────────────
-    function stepIntervalMs() {
-        // 2 columns per beat, adjusted for speed
-        return (60 / bpm) * 500 / speedMult;
-    }
-
-    function highlightColumn(idx) {
-        // Clear previous
-        if (currentCol >= 0 && colSpans[currentCol]) {
-            colSpans[currentCol].forEach(s => {
-                s.classList.remove('active');
-                s.classList.add('played');
+    function buildPills() {
+        pills = [];
+        const stepMs = stepIntervalMs();
+        for (let ci = 0; ci < columns.length; ci++) {
+            const col = columns[ci];
+            if (col.notes.length === 0) continue;
+            // Find next note column
+            let next = ci + 1;
+            while (next < columns.length && columns[next].notes.length === 0) next++;
+            const durMs = Math.max((next - ci) * stepMs, stepMs);
+            col.notes.forEach(n => {
+                pills.push({
+                    colIndex:     ci,
+                    triggerMs:    ci * stepMs,
+                    string:       n.string,   // 1-6
+                    fret:         n.fret,
+                    note:         n.note,
+                    freq:         n.freq,
+                    durMs:        durMs,
+                    state:        'upcoming', // upcoming | hit | missed
+                    triggered:    false,
+                });
             });
         }
+    }
 
-        currentCol = idx;
-        if (idx < 0 || !colSpans[idx]) return;
+    // ─────────────────────────────────────────────
+    //  DRAW
+    // ─────────────────────────────────────────────
+    function pill(ctx, x, y, w, h, r) {
+        r = Math.min(r, h/2, w/2);
+        ctx.beginPath();
+        ctx.moveTo(x+r, y);
+        ctx.lineTo(x+w-r, y);
+        ctx.arcTo(x+w, y, x+w, y+r, r);
+        ctx.lineTo(x+w, y+h-r);
+        ctx.arcTo(x+w, y+h, x+w-r, y+h, r);
+        ctx.lineTo(x+r, y+h);
+        ctx.arcTo(x, y+h, x, y+h-r, r);
+        ctx.lineTo(x, y+r);
+        ctx.arcTo(x, y, x+r, y, r);
+        ctx.closePath();
+    }
 
-        colSpans[idx].forEach(s => {
-            s.classList.remove('played');
-            s.classList.add('active');
-        });
+    function renderCanvas(elapsed) {
+        if (!canvas) return;
+        elapsed = elapsed ?? 0;
+        const W = canvas.width, H = canvas.height;
+        const laneH  = H / 6;
+        const hitX   = W * 0.22;
+        // pixels per ms: right portion covers 3.5 seconds of upcoming
+        const ppm    = (W - hitX) / 3500;
 
-        // Auto-scroll to keep highlighted column in view
-        const firstSpan = colSpans[idx][0];
-        if (firstSpan) {
-            const containerRect = tabDisplay.getBoundingClientRect();
-            const spanRect = firstSpan.getBoundingClientRect();
-            const spanLeft = spanRect.left - containerRect.left + tabDisplay.scrollLeft;
-            const target = spanLeft - containerRect.width * 0.3;
-            tabDisplay.scrollTo({ left: Math.max(0, target), behavior: 'smooth' });
+        canvasCtx.clearRect(0, 0, W, H);
+
+        // ── Lanes ──
+        for (let s = 0; s < 6; s++) {
+            const y = s * laneH;
+            canvasCtx.fillStyle = s % 2 === 0 ? '#0d0d0d' : '#111';
+            canvasCtx.fillRect(0, y, W, laneH);
+
+            // String line
+            canvasCtx.strokeStyle = '#222';
+            canvasCtx.lineWidth = 1;
+            canvasCtx.beginPath();
+            canvasCtx.moveTo(0, y + laneH/2);
+            canvasCtx.lineTo(W, y + laneH/2);
+            canvasCtx.stroke();
+
+            // Lane label
+            canvasCtx.fillStyle = '#333';
+            canvasCtx.font = `bold 11px Courier New`;
+            canvasCtx.textAlign = 'left';
+            canvasCtx.textBaseline = 'middle';
+            canvasCtx.fillText(STRING_LABELS[s], 6, y + laneH/2);
         }
-    }
 
-    function clearAllHighlights() {
-        colSpans.forEach(spans => {
-            spans.forEach(s => {
-                s.classList.remove('active', 'played');
-            });
+        // Lane dividers
+        canvasCtx.strokeStyle = '#1a1a1a';
+        canvasCtx.lineWidth = 1;
+        for (let s = 1; s < 6; s++) {
+            canvasCtx.beginPath();
+            canvasCtx.moveTo(0, s * laneH);
+            canvasCtx.lineTo(W, s * laneH);
+            canvasCtx.stroke();
+        }
+
+        // ── Pills ──
+        pills.forEach(p => {
+            const timeUntil = p.triggerMs - elapsed;
+            const x  = hitX + timeUntil * ppm;
+            const pw = Math.max(p.durMs * ppm - 4, 28);
+            const lY = (p.string - 1) * laneH;
+            const ph = laneH * 0.78;
+            const py = lY + (laneH - ph) / 2;
+
+            if (x > W + pw || x + pw < -20) return; // off screen
+
+            let color = STRING_COLORS[p.string - 1];
+            if (p.state === 'hit')    color = '#ffffff';
+            if (p.state === 'missed') color = '#2a2a2a';
+
+            // Glow as pill approaches hit line
+            if (p.state === 'upcoming' && timeUntil >= 0 && timeUntil < 300) {
+                canvasCtx.shadowColor = color;
+                canvasCtx.shadowBlur  = 12;
+            }
+
+            canvasCtx.fillStyle = color;
+            pill(canvasCtx, x, py, pw, ph, ph/2);
+            canvasCtx.fill();
+            canvasCtx.shadowBlur = 0;
+
+            // Fret number
+            const fontSize = Math.min(ph * 0.72, 24);
+            canvasCtx.font = `bold ${fontSize}px Arial`;
+            canvasCtx.textAlign = 'center';
+            canvasCtx.textBaseline = 'middle';
+            canvasCtx.fillStyle = p.state === 'missed' ? '#555' : '#000';
+            canvasCtx.fillText(p.fret, x + pw/2, py + ph/2);
         });
-        currentCol = -1;
+
+        // ── Hit line ──
+        canvasCtx.strokeStyle = 'rgba(255,255,255,0.5)';
+        canvasCtx.lineWidth = 2;
+        canvasCtx.setLineDash([5,5]);
+        canvasCtx.beginPath();
+        canvasCtx.moveTo(hitX, 0);
+        canvasCtx.lineTo(hitX, H);
+        canvasCtx.stroke();
+        canvasCtx.setLineDash([]);
+
+        // Hit line glow dot per lane
+        for (let s = 0; s < 6; s++) {
+            canvasCtx.fillStyle = 'rgba(255,255,255,0.12)';
+            canvasCtx.beginPath();
+            canvasCtx.arc(hitX, s * laneH + laneH/2, 4, 0, Math.PI*2);
+            canvasCtx.fill();
+        }
+
+        // ── Parabolic Bombs ──
+        const now = performance.now();
+        activeBombs = activeBombs.filter(b => now < b.landTime + 300);
+
+        activeBombs.forEach(bomb => {
+            const total   = bomb.landTime - bomb.launchTime;
+            const elapsed2 = now - bomb.launchTime;
+            const t       = Math.max(0, Math.min(elapsed2 / total, 1));
+
+            // Parabolic x: launches from right edge, lands on hitX
+            const bx = hitX + (W - hitX) * (1 - t);
+
+            // Parabolic y: arc up then down to lane centre
+            const laneY = bomb.targetLane * laneH + laneH / 2;
+            const peakY = laneY - (H * 0.65); // peak height above lane
+            // y = at² + bt + c  passing through (0, laneY), peak at t=0.5, (1, laneY)
+            const by = laneY + (peakY - laneY) * 4 * t * (1 - t);
+
+            // Trail
+            if (!bomb.trail) bomb.trail = [];
+            if (t < 1) bomb.trail.push({ x: bx, y: by });
+            if (bomb.trail.length > 22) bomb.trail.shift();
+
+            // Draw trail dots
+            bomb.trail.forEach((pt, i) => {
+                const a = (i / bomb.trail.length) * 0.5;
+                const r = 3 * (i / bomb.trail.length);
+                canvasCtx.beginPath();
+                canvasCtx.arc(pt.x, pt.y, Math.max(r, 1.5), 0, Math.PI*2);
+                canvasCtx.fillStyle = `rgba(255,255,255,${a})`;
+                canvasCtx.fill();
+            });
+
+            if (t < 1) {
+                // Flying ball — white with glow
+                const grad = canvasCtx.createRadialGradient(bx-3, by-3, 1, bx, by, 11);
+                grad.addColorStop(0, '#ffffff');
+                grad.addColorStop(1, 'rgba(180,220,255,0.7)');
+                canvasCtx.beginPath();
+                canvasCtx.arc(bx, by, 11, 0, Math.PI*2);
+                canvasCtx.fillStyle = grad;
+                canvasCtx.shadowColor = '#adf';
+                canvasCtx.shadowBlur  = 16;
+                canvasCtx.fill();
+                canvasCtx.shadowBlur  = 0;
+            } else {
+                // Landing squish burst on hit line
+                const age   = now - bomb.landTime;
+                const burst = Math.min(age / 120, 1);
+                const alpha = 1 - burst;
+                canvasCtx.beginPath();
+                canvasCtx.ellipse(hitX, laneY,
+                    14 + burst * 18,
+                    10 - burst * 8,
+                    0, 0, Math.PI*2);
+                canvasCtx.fillStyle = `rgba(255,255,255,${alpha * 0.6})`;
+                canvasCtx.fill();
+                // Ring
+                canvasCtx.beginPath();
+                canvasCtx.arc(hitX, laneY, 11 + burst * 16, 0, Math.PI*2);
+                canvasCtx.strokeStyle = `rgba(255,255,255,${alpha * 0.4})`;
+                canvasCtx.lineWidth = 2;
+                canvasCtx.stroke();
+            }
+        });
     }
 
-    function stepForward() {
-        const nextCol = currentCol + 1;
+    // ─────────────────────────────────────────────
+    //  RAF LOOP
+    // ─────────────────────────────────────────────
+    function rafLoop() {
+        if (!isPlaying) return;
+        const elapsed = performance.now() - startTime;
+        const stepMs  = stepIntervalMs();
+        const newCol  = Math.floor(elapsed / stepMs);
 
-        if (nextCol >= columns.length) {
+        // Trigger any columns we've crossed
+        for (let c = lastTriggeredCol + 1; c <= newCol && c < columns.length; c++) {
+            triggerColumn(c);
+        }
+        if (newCol > lastTriggeredCol) lastTriggeredCol = Math.min(newCol, columns.length - 1);
+
+        // Check end
+        if (elapsed / stepMs >= columns.length) {
             if (isLooping) {
-                clearAllHighlights();
-                // Don't call stepForward immediately — let the interval do it next tick
-                currentCol = -1;
-                return;
+                startTime = performance.now();
+                lastTriggeredCol = -1;
+                currentExpectedNotes = [];
+                buildPills();
+                scheduleBombs();
             } else {
                 stop();
                 return;
             }
         }
 
-        highlightColumn(nextCol);
+        // Mark pills as triggered/missed
+        pills.forEach(p => {
+            const timeUntil = p.triggerMs - elapsed;
+            if (!p.triggered && timeUntil <= 0) {
+                p.triggered = true;
+                // Pill missed if it gets past hit line with no hit
+                if (p.state === 'upcoming') {
+                    setTimeout(() => {
+                        if (p.state === 'upcoming') p.state = 'missed';
+                    }, p.durMs);
+                }
+            }
+        });
 
-        const col = columns[nextCol];
-        const noteDuration = stepIntervalMs() / 1000 * 1.5; // notes ring slightly longer than one step
-
-        if (col.notes.length > 0) {
-            col.notes.forEach(n => playNoteNow(n.freq, noteDuration));
-
-            // Update current note display
-            const noteNames = col.notes.map(n => n.note).join(', ');
-            currentNoteSpan.textContent = noteNames;
-
-            // Tell mic what to expect
-            if (micStream) setExpectedNotes(col.notes);
-
-
-        } else {
-            currentNoteSpan.textContent = '-';
-        }
-
-        positionSpan.textContent = nextCol + 1;
+        renderCanvas(elapsed);
+        positionSpan.textContent = Math.min(newCol + 1, columns.length);
+        rafId = requestAnimationFrame(rafLoop);
     }
 
-    function play() {
-        if (columns.length === 0) {
-            alert('Please update the tab first!');
-            return;
-        }
+    function triggerColumn(ci) {
+        currentCol = ci;
+        const col = columns[ci];
+        const noteDur = stepIntervalMs() / 1000 * 1.5;
 
+        if (col.notes.length > 0) {
+            col.notes.forEach(n => playNoteNow(n.freq, noteDur));
+            const names = col.notes.map(n => n.note).join(', ');
+            currentNoteSpan.textContent = names;
+            if (micStream) setExpectedNotes(col.notes, currentExpectedNotes.length > 0);
+        } else {
+            const holdover = currentExpectedNotes.map(n => n.note).join(', ');
+            currentNoteSpan.textContent = holdover ? `(${holdover})` : '-';
+        }
+    }
+
+    // Pre-schedule all bombs at play() time so they're already arcing through the air
+    function scheduleBombs() {
+        activeBombs = [];
+        const stepMs   = stepIntervalMs();
+        const flightMs = stepMs * 10; // bomb takes 10 columns to travel — nice long arc
+
+        pills.forEach(p => {
+            const landTime   = startTime + p.triggerMs;
+            const launchTime = landTime - flightMs;
+            activeBombs.push({
+                targetLane: p.string - 1, // 0-5
+                launchTime,
+                landTime,
+                trail: [],
+            });
+        });
+    }
+
+    // ─────────────────────────────────────────────
+    //  PLAY / STOP
+    // ─────────────────────────────────────────────
+    function play() {
+        if (columns.length === 0) { alert('Please update the tab first!'); return; }
         ensureAudioCtx();
-        clearAllHighlights();
-        currentCol = -1;
         isPlaying = true;
         playBtn.disabled = true;
         stopBtn.disabled = false;
-
-        // Fire immediately so there's no gap, then on interval
-        stepForward();
-        stepTimerId = setInterval(stepForward, stepIntervalMs());
+        currentCol = -1;
+        lastTriggeredCol = -1;
+        currentExpectedNotes = [];
+        buildPills();
+        startTime = performance.now();
+        scheduleBombs();
+        if (rafId) cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(rafLoop);
     }
 
     function stop() {
         isPlaying = false;
-        if (stepTimerId) { clearInterval(stepTimerId); stepTimerId = null; }
-        clearAllHighlights();
+        if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
         playBtn.disabled = false;
         stopBtn.disabled = true;
-        currentNoteSpan.textContent = '-';
-        detectedNoteSpan.textContent = '-';
-        positionSpan.textContent = '0';
+        currentNoteSpan.textContent   = '-';
+        detectedNoteSpan.textContent  = '-';
+        positionSpan.textContent      = '0';
+        currentExpectedNotes          = [];
+        activeBombs = [];
         document.body.style.backgroundColor = '#000';
-        currentExpectedNotes = [];
-        tabDisplay.scrollTo({ left: 0, behavior: 'smooth' });
+        // Draw static preview
+        buildPills();
+        renderCanvas(0);
+    }
+
+    // ─────────────────────────────────────────────
+    //  AUDIO HELPERS
+    // ─────────────────────────────────────────────
+    function stepIntervalMs() { return (60 / bpm) * 500 / speedMult; }
+
+    function ensureAudioCtx() {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        return audioCtx;
+    }
+
+    function playNoteNow(freq, duration) {
+        if (!playbackEnabled || !freq) return;
+        const ctx = ensureAudioCtx(), now = ctx.currentTime;
+        const osc = ctx.createOscillator(), gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0, now);
+        gain.gain.linearRampToValueAtTime(0.8, now + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.4, now + 0.08);
+        gain.gain.exponentialRampToValueAtTime(0.2, now + duration);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + duration + 0.08);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(now); osc.stop(now + duration + 0.1);
     }
 
     // ─────────────────────────────────────────────
@@ -737,7 +849,7 @@
                 correlation += Math.abs(buffer[i] - buffer[i + offset]);
             }
             correlation = 1 - correlation / MAX_SAMPLES;
-            if (correlation > 0.9 && correlation > lastCorrelation && correlation > best_correlation) {
+            if (correlation > 0.8 && correlation > lastCorrelation && correlation > best_correlation) {
                 best_correlation = correlation;
                 best_offset = offset;
             }
@@ -757,13 +869,15 @@
     }
 
     let currentExpectedNotes = [];
+    let nextExpectedNotes = [];   // pre-loaded so lookahead can prime it
     let graceUntil = 0;
-    let wrongFrames = 0;        // consecutive wrong-note frames
-    const WRONG_THRESHOLD = 4;  // must be wrong this many frames in a row before going red
+    let wrongFrames = 0;
+    const WRONG_THRESHOLD = 4;
+    const LOOKAHEAD_MS = 200;     // start accepting next note this many ms before column hits
 
-    function setExpectedNotes(notes) {
+    function setExpectedNotes(notes, useGrace = false) {
         currentExpectedNotes = notes;
-        graceUntil = performance.now() + 120;
+        graceUntil = useGrace ? performance.now() + 100 : 0;
         wrongFrames = 0;
     }
 
@@ -780,24 +894,30 @@
             const detected = getClosestNote(freq);
             detectedNoteSpan.textContent = detected ?? 'sound';
 
-            // Still in grace window after step advance — stay black
+            // In grace window after step — stay black
             if (performance.now() < graceUntil) {
                 wrongFrames = 0;
                 document.body.style.backgroundColor = '#000';
                 return;
             }
 
+            // Only compare if there's an expected note — dash columns = never red
             if (detected && currentExpectedNotes.length > 0) {
                 const correct = currentExpectedNotes.some(n => n.note === detected);
                 if (correct) {
                     wrongFrames = 0;
-                    document.body.style.backgroundColor = '#003300';
+                    document.body.style.backgroundColor = '#000';
+                    // Mark matching pills as hit
+                    const elapsed = startTime ? performance.now() - startTime : 0;
+                    pills.forEach(p => {
+                        if (p.state === 'upcoming' && p.triggered && p.note === detected) {
+                            p.state = 'hit';
+                            setTimeout(() => { if (p.state === 'hit') p.state = 'missed'; }, p.durMs * 0.8);
+                        }
+                    });
                 } else {
                     wrongFrames++;
-                    // Only go red once we've seen wrong note consistently
-                    if (wrongFrames >= WRONG_THRESHOLD) {
-                        document.body.style.backgroundColor = '#CC0000';
-                    }
+                    if (wrongFrames >= WRONG_THRESHOLD) document.body.style.backgroundColor = '#CC0000';
                 }
             } else {
                 wrongFrames = 0;
@@ -925,6 +1045,7 @@ E|------------------------------------------------|`;
     });
 
     // Init
+    initCanvas();
     updateDisplay();
 
     // ── FULLSCREEN ──
