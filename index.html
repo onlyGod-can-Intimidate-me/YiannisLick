@@ -213,6 +213,14 @@
             <input type="number" id="bpm-input" value="100" min="40" max="300" placeholder="BPM">
             <button id="mic-btn">🎤 MIC</button>
         </div>
+        <div class="button-group" style="align-items:center;">
+            <label style="color:#aaa; font-size:13px; white-space:nowrap;">🎤 Boost</label>
+            <input type="range" id="mic-gain" min="1" max="8" step="0.5" value="3"
+                style="flex:1; accent-color:#4CAF50;"
+                oninput="document.getElementById('gain-val').textContent=this.value+'x';
+                         if(window._micGainNode) window._micGainNode.gain.value=parseFloat(this.value);">
+            <span id="gain-val" style="color:#4CAF50; font-size:13px; min-width:28px;">3x</span>
+        </div>
         <div class="button-group">
             <button id="parse-btn">🔄 UPDATE</button>
             <button id="stop-btn" disabled>⏹ STOP</button>
@@ -227,12 +235,12 @@
     </div>
 
     <h3>✏️ Edit Tab:</h3>
-    <textarea id="tab-editor">e|------------------------------------------------|
-B|------------------------------------------------|
-G|------------------------------------------------|
-D|---------------0-2-3-2--------------------------|
-A|-------0-1-3----------3-1-0---------------------|
-E|-0-1-3-------------------------3-1-0------------|</textarea>
+    <textarea id="tab-editor">e|-----------------------------------|
+B|-----------------------------------|
+G|-----------------------------------|
+D|-------------0-2-3-2-0-------------|
+A|-------0-2-3-----------3-2-0-------|
+E|-0-1-3-----------------------3-1-0-|</textarea>
     <button id="addbar-btn" style="background:#9C27B0; margin-bottom:8px;">➕ ADD BAR</button>
     <button id="clear-btn">🗑️ CLEAR</button>
     <div id="load-list"></div>
@@ -686,6 +694,9 @@ E|-0-1-3-------------------------3-1-0------------|</textarea>
                 currentExpectedNotes = [];
                 buildPills();
                 scheduleBombs();
+                renderCanvas(0); // fresh frame with full-color pills
+                rafId = requestAnimationFrame(rafLoop);
+                return; // skip stale render below
             } else {
                 stop();
                 return;
@@ -820,7 +831,13 @@ E|-0-1-3-------------------------3-1-0------------|</textarea>
             const mic = audioCtx.createMediaStreamSource(micStream);
             scriptProc = audioCtx.createScriptProcessor(2048, 1, 1);
 
-            mic.connect(analyser);
+            // Software boost for acoustic guitars
+            const gainNode = audioCtx.createGain();
+            gainNode.gain.value = parseFloat(document.getElementById('mic-gain').value) || 3.0;
+            window._micGainNode = gainNode;
+
+            mic.connect(gainNode);
+            gainNode.connect(analyser);
             analyser.connect(scriptProc);
             scriptProc.connect(audioCtx.destination);
             scriptProc.onaudioprocess = processAudio;
