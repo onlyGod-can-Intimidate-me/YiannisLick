@@ -1,883 +1,1596 @@
-
 <!DOCTYPE html>
+<!--
+ ╔══════════════════════════════════════════════════════════════════════════════╗
+		                     🎤  YIANNISLICK 1.0  🎤               
+ ╠══════════════════════════════════════════════════════════════════════════════╣
+ ║  A browser-only karaoke pitch trainer that combines:                         ║
+ ║    • Spotify's Basic Pitch (ML note detection) — runs fully in-browser       ║
+ ║    • AssemblyAI word-level transcription (optional, API key required)        ║
+ ║    • Web Audio API real-time microphone pitch detection (autocorrelation)    ║
+ ║    • RapidAPI youtube-mp36 bridge for direct YouTube → MP3 downloads         ║
+ ║                                                                              ║
+ ║  ARCHITECTURE OVERVIEW                                                       ║
+ ║  ─────────────────────                                                       ║
+ ║  1. User loads audio (file drop OR YouTube URL via RapidAPI)                 ║
+ ║  2. "Detect Notes" runs Basic Pitch + AssemblyAI in parallel                 ║
+ ║  3. Notes → pill objects rendered on a scrolling canvas timeline             ║
+ ║  4. On playback, the RAF loop ticks song time, yncs lyrics + expected note   ║
+ ║  5. Mic input is autocorrelated each audio frame → smoothed note name        ║
+ ║  6. Sung note vs. expected note → colour feedback on the big karaoke word    ║
+ ║                                                                              ║
+ ║  DEPENDENCIES (all CDN / ESM — no build step)                                ║
+ ║    @spotify/basic-pitch  1.0.1   https://esm.sh/                             ║
+ ║    AssemblyAI REST API   v2      https://api.assemblyai.com/                 ║
+ ║    youtube-mp36 (RapidAPI)       https://rapidapi.com/ytjar/api/youtube-mp36 ║
+ ║                                                                              ║ 
+ ║  YOU CAN ALWAYS FIND ME ON GITHUB IF YOU HAVE FURTHER QUESTIONS              ║   
+ ║  https://github.com/onlyGod-can-Intimidate-me/YiannisLick                    ║
+ ║  JOHN TSOROTES                                                               ║
+ ╚══════════════════════════════════════════════════════════════════════════════╝
+-->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <!--
+        maximum-scale=1 + user-scalable=no keeps the layout locked on mobile
+        so pinch-zoom doesn't break the canvas / button layout.
+    -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>🎤 Vocal Trainer</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
+        /* ── RESET ─────────────────────────────────────────────────────────────
+           -webkit-tap-highlight-color removes the blue flash on mobile taps.   */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        /* ── BASE ──────────────────────────────────────────────────────────── */
         body {
-            font-family: 'Courier New', monospace;
+            font-family: 'Courier New', monospace; /* monospace keeps note names
+                                                       aligned at fixed widths  */
             background: #0a0a0a;
             color: #fff;
-            padding: 10px;
-            overflow-x: hidden;
-            transition: background-color 0.15s ease;
+            padding: 8px;
+            overflow-x: hidden; /* prevent horizontal scroll on small screens  */
         }
 
-        h2 { text-align: center; font-size: 22px; margin-bottom: 12px; letter-spacing: 2px; }
-
-        /* ── SETUP PANEL ── */
-        #setup-panel {
-            background: #111;
-            border: 2px solid #E91E63;
-            border-radius: 10px;
-            padding: 16px;
-            margin-bottom: 12px;
-        }
-
-        #setup-panel h3 { color: #E91E63; margin-bottom: 10px; font-size: 14px; letter-spacing: 1px; }
-
-        .setup-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-            margin-bottom: 8px;
-        }
-        .setup-row.single { grid-template-columns: 1fr; }
-
-        input[type="text"], input[type="password"] {
-            width: 100%;
-            padding: 12px;
-            font-size: 13px;
-            border-radius: 8px;
-            border: 2px solid #333;
-            background: #1a1a1a;
-            color: #fff;
-            font-family: 'Courier New', monospace;
-        }
-        input[type="text"]:focus, input[type="password"]:focus {
-            outline: none;
-            border-color: #E91E63;
-        }
-
-        /* ── DROP ZONE ── */
+        /* ── DROP ZONE ─────────────────────────────────────────────────────────
+           Clickable panel that also accepts drag-and-drop audio files.
+           The hidden <input type="file"> is triggered programmatically.       */
         #drop-zone {
             border: 2px dashed #E91E63;
-            border-radius: 10px;
-            padding: 28px;
+            border-radius: 8px;
+            padding: 14px;
             text-align: center;
-            margin-bottom: 12px;
+            margin-bottom: 8px;
             cursor: pointer;
-            transition: background 0.2s;
             background: #0f0f0f;
         }
-        #drop-zone:hover, #drop-zone.drag-over { background: #1a0a10; }
-        #drop-zone .icon { font-size: 36px; margin-bottom: 8px; }
-        #drop-zone .label { color: #888; font-size: 14px; }
-        #drop-zone .filename { color: #E91E63; font-size: 13px; margin-top: 6px; }
+        #drop-zone .icon  { font-size: 24px; }
+        #drop-zone .label { color: #666; font-size: 12px; }
+        #drop-zone .fname { color: #E91E63; font-size: 12px; margin-top: 3px; }
 
-        /* ── BUTTONS ── */
+        /* ── STATUS / PROGRESS BAR ─────────────────────────────────────────────
+           Hidden by default; toggled via .visible class while analysis runs.
+           The inner fill div animates width 0 → 100 % via JS.                */
+        #status-bar {
+            background: #FF9800;
+            border-radius: 6px;
+            padding: 10px 14px;
+            margin-bottom: 8px;
+            font-size: 13px;
+            font-weight: bold;
+            letter-spacing: 1px;
+            text-align: center;
+            color: #000;
+            display: none; /* shown via .visible */
+        }
+        #status-bar.visible { display: block; }
+
+        #progress-inner {
+            height: 4px;
+            background: rgba(0,0,0,0.3);
+            border-radius: 2px;
+            margin-top: 6px;
+            overflow: hidden;
+        }
+        /* CSS transition gives smooth progress updates even on fast callbacks  */
+        #progress-fill {
+            height: 100%;
+            background: #000;
+            width: 0%;
+            transition: width 0.3s;
+            border-radius: 2px;
+        }
+
+        /* ── CANVAS (scrolling note timeline) ─────────────────────────────────
+           Pills scroll right→left; the hit line sits at 20% from the left.
+           height: 200px is overridden by JS canvas.height for pixel accuracy. */
+        #canvas-wrap {
+            border: 1px solid #1a1a1a;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #080808;
+            margin-bottom: 8px;
+        }
+        #vocal-canvas {
+            display: block;
+            width: 100%;
+            height: 200px;
+        }
+
+        /* ── KARAOKE MAIN DISPLAY ──────────────────────────────────────────────
+           Flex-centered panel that holds the big lyric word + note readout.
+           position: relative lets the key-legend overlay sit in the corner.   */
+        #karaoke-wrap {
+            background: #000;
+            border-radius: 10px;
+            margin-bottom: 8px;
+            padding: 20px 16px 16px;
+            min-height: 220px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        /* Key legend — absolute top-right overlay, never takes up layout space */
+        #key-legend {
+            position: absolute;
+            top: 14px;
+            right: 14px;
+            font-size: 11px;
+            font-weight: bold;
+            line-height: 1.8;
+            text-align: right;
+        }
+        #key-legend .k-high    { color: #c8e600; } /* sung pitch > expected    */
+        #key-legend .k-low     { color: #f44336; } /* sung pitch < expected    */
+        #key-legend .k-correct { color: #4CAF50; } /* within ±1 semitone       */
+
+        /* The large centred lyric word; font clamps between 48 and 96 px      */
+        #karaoke-center {
+            text-align: center;
+            flex: 1;
+        }
+        #big-word {
+            font-size: clamp(48px, 12vw, 96px);
+            font-weight: bold;
+            letter-spacing: 4px;
+            color: #fff;
+            line-height: 1;
+            margin-bottom: 12px;
+            transition: color 0.08s ease; /* very fast so feedback feels live  */
+        }
+
+        /* Colour states driven by JS className assignment */
+        #big-word.correct  { color: #4CAF50; }
+        #big-word.too-high { color: #c8e600; }
+        #big-word.too-low  { color: #f44336; }
+
+        /* Sung → expected note display below the big word */
+        #note-name {
+            font-size: 22px;
+            font-weight: bold;
+            letter-spacing: 6px;
+            color: #333;
+            transition: color 0.08s ease;
+        }
+        #note-name.correct  { color: #4CAF50; }
+        #note-name.too-high { color: #c8e600; }
+        #note-name.too-low  { color: #f44336; }
+
+        /* ── SONG PROGRESS BAR ─────────────────────────────────────────────────
+           Thin pink bar below karaoke panel; updated every RAF tick.          */
+        #song-progress-wrap {
+            background: #111;
+            border-radius: 4px;
+            height: 6px;
+            margin-bottom: 10px;
+            overflow: hidden;
+        }
+        #song-progress-fill {
+            height: 100%;
+            background: #E91E63;
+            width: 0%;
+            transition: width 0.5s linear; /* smooth half-second interpolation */
+            border-radius: 4px;
+        }
+
+        /* ── BUTTONS ───────────────────────────────────────────────────────────
+           CSS Grid-based rows — 1, 2, or 3 columns depending on modifier.    */
+        .btn-row               { display: grid; grid-template-columns: 1fr 1fr;     gap: 8px; margin-bottom: 8px; }
+        .btn-row.single        { grid-template-columns: 1fr; }
+        .btn-row.three         { grid-template-columns: 1fr 1fr 1fr; }
+
         button {
-            padding: 14px 12px;
-            font-size: 14px;
+            padding: 13px 8px;
+            font-size: 13px;
             cursor: pointer;
             border: none;
             border-radius: 8px;
-            background: #E91E63;
+            background: #E91E63;  /* default pink */
             color: white;
             font-weight: bold;
             font-family: 'Courier New', monospace;
-            touch-action: manipulation;
+            touch-action: manipulation; /* prevents 300 ms tap delay on mobile */
             width: 100%;
             letter-spacing: 1px;
         }
-        button:active { transform: scale(0.96); opacity: 0.85; }
-        button:disabled { background: #333; opacity: 0.5; color: #666; }
-        button.secondary { background: #333; }
-        button.green { background: #4CAF50; }
-        button.cyan { background: #00BCD4; }
+        button:active   { transform: scale(0.96); }          /* tactile press feel */
+        button:disabled { background: #1a1a1a; color: #333; } /* greyed-out state  */
 
-        .btn-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-            margin-bottom: 10px;
-        }
-        .btn-row.single { grid-template-columns: 1fr; }
+        /* Per-button colour overrides */
+        #analyse-btn { background: #FF9800; } /* orange  — analysis action     */
+        #play-btn    { background: #4CAF50; } /* green   — start playback      */
+        #stop-btn    { background: #444;    } /* grey    — stop / reset        */
+        #mic-btn     { background: #00BCD4; } /* cyan    — mic permission      */
 
-        /* ── CANVAS ── */
-        #canvas-wrap {
-            position: relative;
-            border: 2px solid #1a1a1a;
-            border-radius: 10px;
-            overflow: hidden;
-            background: #080808;
-            margin-bottom: 12px;
-        }
-        #vocal-canvas { display: block; width: 100%; height: 260px; }
-
-        /* ── LYRICS ── */
-        #lyrics-display {
-            background: #111;
-            border: 2px solid #222;
-            border-radius: 10px;
-            padding: 16px;
-            margin-bottom: 12px;
-            min-height: 70px;
-            text-align: center;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-        }
-        #lyric-line {
-            font-size: 20px;
-            font-weight: bold;
-            letter-spacing: 2px;
-            color: #fff;
-            margin-bottom: 6px;
-            min-height: 28px;
-        }
-        #note-line {
-            font-size: 13px;
-            color: #E91E63;
-            letter-spacing: 4px;
-            min-height: 18px;
-        }
-
-        /* ── STATUS ── */
-        #status-bar {
+        /* ── STATS ROW ─────────────────────────────────────────────────────────
+           Three equal-width cards: MIC status, your note, expected note.      */
+        #stats-row {
             display: grid;
             grid-template-columns: 1fr 1fr 1fr;
-            gap: 8px;
-            margin-bottom: 12px;
-        }
-        .stat-box {
-            background: #111;
-            border: 2px solid #222;
-            border-radius: 8px;
-            padding: 10px 6px;
-            text-align: center;
-            font-size: 12px;
-        }
-        .stat-box .val { font-size: 16px; font-weight: bold; color: #E91E63; }
-        #mic-stat { border-color: #c62828; }
-        #mic-stat.on { border-color: #2e7d32; }
-
-        /* ── PROGRESS ── */
-        #progress-wrap {
-            background: #111;
-            border: 2px solid #222;
-            border-radius: 10px;
-            padding: 12px;
-            margin-bottom: 12px;
-            display: none;
-        }
-        #progress-label { font-size: 13px; color: #888; margin-bottom: 8px; }
-        #progress-bar-bg {
-            background: #222;
-            border-radius: 10px;
-            height: 10px;
-            overflow: hidden;
-        }
-        #progress-bar {
-            height: 100%;
-            background: linear-gradient(90deg, #E91E63, #FF5722);
-            border-radius: 10px;
-            width: 0%;
-            transition: width 0.2s;
-        }
-
-        /* ── CONTROLS ── */
-        #controls {
-            background: #111;
-            border: 2px solid #222;
-            border-radius: 10px;
-            padding: 12px;
-            margin-bottom: 12px;
-        }
-        #controls label { font-size: 12px; color: #888; display: block; margin-bottom: 4px; }
-        input[type="range"] { width: 100%; accent-color: #E91E63; margin-bottom: 10px; }
-
-        .speed-btns {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
             gap: 6px;
             margin-bottom: 8px;
         }
-        .speed-btns button { font-size: 12px; padding: 10px 4px; background: #222; }
-        .speed-btns button.active { background: #E91E63; }
+        .stat {
+            background: #111;
+            border: 2px solid #1e1e1e;
+            border-radius: 6px;
+            padding: 6px 4px;
+            text-align: center;
+            font-size: 10px;
+            color: #555;
+        }
+        .stat .v {
+            font-size: 14px;
+            font-weight: bold;
+            color: #E91E63;
+            display: block;
+        }
+        /* Green accent when mic is active */
+        #mic-stat.on         { border-color: #4CAF50; }
+        #mic-stat.on .v      { color: #4CAF50; }
+
+        /* ── CONTROLS PANEL ────────────────────────────────────────────────────
+           Currently holds the mic gain slider; could be extended with BPM etc. */
+        #controls {
+            background: #111;
+            border: 1px solid #1e1e1e;
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 8px;
+        }
+        #controls label {
+            font-size: 11px;
+            color: #555;
+            display: block;
+            margin-bottom: 3px;
+        }
+        input[type="range"] {
+            width: 100%;
+            accent-color: #E91E63; /* native range thumb + track colour        */
+        }
+
+        /* ── ASSEMBLYAI KEY SECTION ─────────────────────────────────────────── */
+        #hf-section {
+            background: #0f0f0f;
+            border: 1px solid #1e1e1e;
+            border-radius: 8px;
+            padding: 10px;
+        }
+        #hf-section h4 {
+            font-size: 10px;
+            color: #333;
+            margin-bottom: 6px;
+            letter-spacing: 1px;
+        }
+        input[type="password"] {
+            width: 100%;
+            padding: 8px;
+            font-size: 12px;
+            border-radius: 6px;
+            border: 1px solid #222;
+            background: #111;
+            color: #888;
+            font-family: 'Courier New', monospace;
+        }
+        #hf-msg {
+            font-size: 10px;
+            color: #333;
+            margin-top: 4px;
+            text-align: center;
+        }
+
     </style>
 </head>
 <body>
 
-<h2>🎤 VOCAL TRAINER</h2>
+<!-- ══════════════════════════════════════════════════════════════════════════
+     YOUTUBE → MP3 PANEL
+     Uses the RapidAPI youtube-mp36 endpoint to fetch a download link,
+     then streams the MP3 blob directly into the browser (no server needed).
+     Keys are persisted to localStorage so users don't re-enter them.
+     ══════════════════════════════════════════════════════════════════════════ -->
+<div style="background:#111; border:2px solid #333; border-radius:8px; padding:10px; margin-bottom:8px;">
 
-<!-- API Setup -->
-<div id="setup-panel">
-    <h3>⚙ HUGGING FACE API KEY</h3>
-    <div class="setup-row single">
-        <input type="password" id="hf-token" placeholder="hf_xxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off">
+    <!-- Row 1: YouTube URL input + fetch button -->
+    <div style="display:grid; grid-template-columns:1fr auto; gap:8px; margin-bottom:6px;">
+        <input type="text" id="yt-url" placeholder="🎬 Paste YouTube URL..."
+            style="padding:11px; font-size:13px; border-radius:8px; border:2px solid #333;
+                   background:#0f0f0f; color:#fff; font-family:'Courier New',monospace; width:100%;">
+        <button onclick="fetchYoutube()" id="yt-btn"
+            style="background:#FF5722; white-space:nowrap; width:auto; padding:11px 14px; font-size:13px;">
+            ⬇ GET
+        </button>
     </div>
-    <div class="setup-row single">
-        <button id="save-token-btn" onclick="saveToken()">💾 SAVE KEY</button>
+
+    <!-- Row 2: RapidAPI key (saved to localStorage on change) -->
+    <div style="display:grid; grid-template-columns:1fr auto; gap:8px;">
+        <input type="password" id="rapid-key" placeholder="RapidAPI key..."
+            style="padding:8px; font-size:12px; border-radius:6px; border:1px solid #222;
+                   background:#0f0f0f; color:#888; font-family:'Courier New',monospace; width:100%;"
+            onchange="localStorage.setItem('rapid_key', this.value);">
+        <!-- Static label showing which RapidAPI endpoint is used -->
+        <div style="font-size:10px; color:#444; display:flex; align-items:center;">youtube-mp36</div>
     </div>
-    <div id="token-status" style="font-size:12px; color:#888; margin-top:6px; text-align:center;"></div>
+
+    <!-- Status line — updated dynamically during fetch phases -->
+    <div id="yt-status" style="font-size:11px; color:#555; margin-top:6px; text-align:center;">
+        Paste YouTube URL + RapidAPI key — or drop a file below
+    </div>
 </div>
 
-<!-- Drop Zone -->
-<div id="drop-zone" onclick="document.getElementById('audio-input').click()">
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     AUDIO FILE DROP ZONE
+     Accepts drag-and-drop OR a tap/click that opens the hidden file picker.
+     Supported: mp3, wav, m4a (anything the browser's AudioContext can decode).
+     ══════════════════════════════════════════════════════════════════════════ -->
+<div id="drop-zone" onclick="document.getElementById('fi').click()">
     <div class="icon">🎵</div>
-    <div class="label">Drop acapella mp3 / wav here<br>or tap to browse</div>
-    <div class="filename" id="file-name"></div>
-    <input type="file" id="audio-input" accept="audio/*" style="display:none">
+    <div class="label">Drop mp3 / wav / m4a — or tap to browse</div>
+    <div class="fname" id="fname"></div>
+    <!-- Hidden file input — triggered by the drop-zone click handler above -->
+    <input type="file" id="fi" accept="audio/*" style="display:none">
 </div>
 
-<!-- Analyse Button -->
-<div class="btn-row single" style="margin-bottom:10px;">
-    <button id="analyse-btn" disabled onclick="analyseAudio()">🔍 ANALYSE VOCALS</button>
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     ANALYSIS PROGRESS BAR
+     Shown while Basic Pitch + AssemblyAI are running; hidden afterwards.
+     ══════════════════════════════════════════════════════════════════════════ -->
+<div id="status-bar">
+    <span id="status-text">Analysing...</span>
+    <div id="progress-inner"><div id="progress-fill"></div></div>
 </div>
 
-<!-- Progress -->
-<div id="progress-wrap">
-    <div id="progress-label">Analysing...</div>
-    <div id="progress-bar-bg"><div id="progress-bar"></div></div>
-</div>
 
-<!-- Canvas -->
+<!-- ══════════════════════════════════════════════════════════════════════════
+     NOTE TIMELINE CANVAS
+     Pills scroll right-to-left; colours are HSL-mapped across vocal range.
+     The hit line at 20% marks the "sing now" position.
+     ══════════════════════════════════════════════════════════════════════════ -->
 <div id="canvas-wrap">
     <canvas id="vocal-canvas"></canvas>
 </div>
 
-<!-- Lyrics -->
-<div id="lyrics-display">
-    <div id="lyric-line">— load a song to begin —</div>
-    <div id="note-line"></div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     KARAOKE / PITCH FEEDBACK PANEL
+     Shows the current lyric word (large) + sung → expected note (small).
+     Word colour transitions: white → green / yellow / red in real time.
+     ══════════════════════════════════════════════════════════════════════════ -->
+<div id="karaoke-wrap">
+
+    <!-- Colour key legend — absolute top-right corner -->
+    <div id="key-legend">
+        <div class="k-high">YELLOW = TOO HIGH</div>
+        <div class="k-low">RED = TOO LOW</div>
+        <div class="k-correct">GREEN = CORRECT</div>
+    </div>
+
+    <div id="karaoke-center">
+        <!-- Big lyric word — updated every RAF tick from lyricChunks -->
+        <div id="big-word">🎤</div>
+        <!-- Sung note → expected note, e.g. "A4 → G4" -->
+        <div id="note-name">
+            <span id="sung-note">—</span> → <span id="exp-note">—</span>
+        </div>
+    </div>
 </div>
 
-<!-- Playback Controls -->
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     SONG PROGRESS BAR  (thin pink line beneath karaoke panel)
+     ══════════════════════════════════════════════════════════════════════════ -->
+<div id="song-progress-wrap">
+    <div id="song-progress-fill"></div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     TRANSPORT BUTTONS
+     Analyse must run first; Play/Stop are then unlocked.
+     ══════════════════════════════════════════════════════════════════════════ -->
+<div class="btn-row single">
+    <button id="analyse-btn" disabled onclick="analyse()">🎵 DETECT NOTES</button>
+</div>
 <div class="btn-row">
-    <button id="play-btn" class="green" disabled onclick="play()">▶ PLAY</button>
-    <button id="stop-btn" class="secondary" disabled onclick="stop()">⏹ STOP</button>
+    <button id="play-btn"  disabled onclick="play()">▶ PLAY</button>
+    <button id="stop-btn"  disabled onclick="stop()">⏹ STOP</button>
 </div>
 <div class="btn-row">
-    <button id="mic-btn" class="cyan" onclick="initMic()">🎤 MIC</button>
-    <button id="loop-btn" class="secondary" onclick="toggleLoop()">🔁 LOOP</button>
+    <button id="mic-btn"  onclick="initMic()">🎤 MIC ON</button>
+    <button id="loop-btn" onclick="toggleLoop(this)">🔁 LOOP</button>
 </div>
 
-<!-- Status -->
-<div id="status-bar">
-    <div class="stat-box" id="mic-stat">
-        <div class="val" id="mic-val">OFF</div>
-        <div>MIC</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     STATS ROW
+     Live readouts for mic status, your detected note, and expected note.
+     ══════════════════════════════════════════════════════════════════════════ -->
+<div id="stats-row">
+    <div class="stat" id="mic-stat">
+        <span class="v" id="mic-v">OFF</span>MIC
     </div>
-    <div class="stat-box">
-        <div class="val" id="detected-val">—</div>
-        <div>DETECTED</div>
+    <div class="stat">
+        <span class="v" id="you-v">—</span>YOU
     </div>
-    <div class="stat-box">
-        <div class="val" id="expected-val">—</div>
-        <div>EXPECTED</div>
+    <div class="stat">
+        <span class="v" id="exp-v">—</span>EXPECTED
     </div>
 </div>
 
-<!-- Controls -->
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     MIC CONTROLS
+     Gain slider compensates for low-sensitivity microphones.
+     Value range 1×–8× is applied to the Web Audio GainNode in real time.
+     ══════════════════════════════════════════════════════════════════════════ -->
 <div id="controls">
-    <label>🎤 Mic Boost: <span id="boost-val">3x</span></label>
+    <label>🎤 Mic Boost: <span id="boost-lbl">3x</span></label>
     <input type="range" id="mic-boost" min="1" max="8" step="0.5" value="3"
-        oninput="document.getElementById('boost-val').textContent=this.value+'x';
-                 if(window._gainNode) window._gainNode.gain.value=parseFloat(this.value);">
-    <div class="speed-btns">
-        <button onclick="setSpeed(0.5, this)">🐢 SLOW</button>
-        <button onclick="setSpeed(0.75, this)">🚶 MED</button>
-        <button class="active" onclick="setSpeed(1.0, this)">🏃 FAST</button>
-    </div>
+        oninput="document.getElementById('boost-lbl').textContent = this.value + 'x';
+                 if (window._gainNode) window._gainNode.gain.value = +this.value;">
 </div>
 
-<script>
-// ─────────────────────────────────────────────
-//  CONSTANTS
-// ─────────────────────────────────────────────
-const NOTE_FREQS = {
-    'C2':65.41,'C#2':69.30,'D2':73.42,'D#2':77.78,'E2':82.41,'F2':87.31,'F#2':92.50,'G2':98.00,'G#2':103.83,'A2':110.00,'A#2':116.54,'B2':123.47,
-    'C3':130.81,'C#3':138.59,'D3':146.83,'D#3':155.56,'E3':164.81,'F3':174.61,'F#3':185.00,'G3':196.00,'G#3':207.65,'A3':220.00,'A#3':233.08,'B3':246.94,
-    'C4':261.63,'C#4':277.18,'D4':293.66,'D#4':311.13,'E4':329.63,'F4':349.23,'F#4':369.99,'G4':392.00,'G#4':415.30,'A4':440.00,'A#4':466.16,'B4':493.88,
-    'C5':523.25,'C#5':554.37,'D5':587.33,'D#5':622.25,'E5':659.25,'F5':698.46,'F#5':739.99,'G5':783.99,'G#5':830.61,'A5':880.00,'A#5':932.33,'B5':987.77,
-    'C6':1046.50
-};
 
-// Vocal range lanes — low to high, 8 lanes
-const VOCAL_LANES = ['C3','E3','G3','B3','D4','F4','A4','C5'];
-const LANE_COLORS = ['#E91E63','#FF5722','#FF9800','#FFC107','#8BC34A','#00BCD4','#2196F3','#9C27B0'];
+<!-- ══════════════════════════════════════════════════════════════════════════
+     ASSEMBLYAI LYRICS KEY
+     Optional — if omitted, note detection still works but no lyric display.
+     Key is persisted to localStorage so it survives page reloads.
+     ══════════════════════════════════════════════════════════════════════════ -->
+<div id="hf-section">
+    <h4>⚙ LYRICS — ASSEMBLYAI KEY (paste before hitting DETECT)</h4>
+    <input type="password" id="hf-key" placeholder="your assemblyai api key"
+        onchange="localStorage.setItem('aai_token', this.value);">
+    <div id="hf-msg">Paste key above — word-level lyrics run automatically</div>
+</div>
 
-// ─────────────────────────────────────────────
-//  STATE
-// ─────────────────────────────────────────────
-let audioBuffer    = null;
-let audioFile      = null;
-let noteEvents     = [];   // [{timeMs, note, lyric, durMs}]
-let pills          = [];
-let isPlaying      = false;
-let isLooping      = false;
-let startTime      = null;
-let rafId          = null;
-let speedMult      = 1.0;
-let audioCtx       = null;
-let analyser       = null;
-let scriptProc     = null;
-let micStream      = null;
-let sourceNode     = null;
-let currentExpected = null;
-let wrongFrames    = 0;
-const WRONG_THRESH = 4;
 
+<!-- ══════════════════════════════════════════════════════════════════════════
+     MAIN APPLICATION SCRIPT
+     Uses ES module syntax so we can import @spotify/basic-pitch via esm.sh.
+     ══════════════════════════════════════════════════════════════════════════ -->
+<script type="module">
+
+// ── IMPORTS ──────────────────────────────────────────────────────────────────
+// BasicPitch   — Spotify's TensorFlow.js model for polyphonic note detection
+// noteFramesToTime   — converts raw frame output → {startTime, duration, …} objects
+// addPitchBendsToNoteEvents — attaches per-note bend data from contour arrays
+// outputToNotesPoly  — decodes frame + onset matrices → polyphonic note list
+import {
+    BasicPitch,
+    noteFramesToTime,
+    addPitchBendsToNoteEvents,
+    outputToNotesPoly
+} from 'https://esm.sh/@spotify/basic-pitch@1.0.1';
+
+
+// ── NOTE HELPERS ─────────────────────────────────────────────────────────────
+
+/** Western note names in chromatic order, used for MIDI ↔ name conversion. */
+const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+
+/**
+ * Convert a MIDI note number to a human-readable note name.
+ * MIDI 60 = C4, 69 = A4, etc.
+ * @param {number} m - MIDI note number (0–127)
+ * @returns {string} e.g. "A4", "C#3"
+ */
+function midiToName(m) {
+    return NOTE_NAMES[m % 12] + (Math.floor(m / 12) - 1);
+}
+
+/**
+ * Convert a note name string back to its MIDI number.
+ * Used when comparing sung vs. expected pitch.
+ * @param {string} n - Note name, e.g. "G#4"
+ * @returns {number} MIDI note number
+ */
+function nameToMidi(n) {
+    const base = n.replace(/\d/, '');
+    const oct  = parseInt(n.match(/\d/)?.[0] ?? 4);
+    return (oct + 1) * 12 + NOTE_NAMES.indexOf(base);
+}
+
+
+// ── CANVAS / LANE CONSTANTS ───────────────────────────────────────────────────
+
+/**
+ * Vocal range covered by the timeline: C3 (MIDI 48) through C5 (MIDI 72).
+ * 25 semitones gives one lane per semitone across the typical singing range.
+ */
+const N_LANES       = 25;
+const LANE_BASE_MIDI = 48; // C3
+
+/**
+ * Pre-computed HSL colours for each lane, cycling through the visible spectrum
+ * (hue 0–300°) so low notes appear warm and high notes appear cool/violet.
+ */
+const LANE_COLORS = [];
+for (let i = 0; i < N_LANES; i++) {
+    const hue = (i / N_LANES) * 300;
+    LANE_COLORS.push(`hsl(${hue}, 90%, 55%)`);
+}
+
+
+// ── APPLICATION STATE ─────────────────────────────────────────────────────────
+
+let audioFile    = null;   // File object from drop/picker or YouTube blob
+let audioCtx     = null;   // Shared AudioContext (created lazily on first user gesture)
+
+// Web Audio nodes
+let analyser     = null;   // AnalyserNode for reading mic time-domain data
+let scriptProc   = null;   // ScriptProcessorNode triggers processMic() each block
+let micStream    = null;   // MediaStream returned by getUserMedia
+let gainNode     = null;   // GainNode for mic boost (exposed as window._gainNode)
+let sourceNode   = null;   // AudioBufferSourceNode for song playback
+
+/** @type {Array<{timeMs:number, durMs:number, note:string, lane:number,
+ *                midi:number, lyric:string, state:string, triggered:boolean}>} */
+let pills        = [];     // Detected note events (one pill = one note)
+
+let isPlaying    = false;  // True while song is playing
+let isLooping    = false;  // True when loop toggle is active
+let startTime    = null;   // performance.now() value at playback start
+let songDuration = 0;      // Total song duration in milliseconds
+let rafId        = null;   // requestAnimationFrame handle (for cancellation)
+let currentExpected = null; // Note name the singer should currently hit
+let wrongFrames  = 0;      // Consecutive mic frames outside the ±1 semitone window
+
+/**
+ * Number of consecutive wrong frames required before switching the
+ * display to "too-high" or "too-low". Prevents flickering on transient errors.
+ */
+const WRONG_THRESH = 3;
+
+/** @type {Array<{timestamp:[number,number], text:string}>} Word-level lyric data from AssemblyAI */
+let lyricChunks = [];
+
+// Canvas references (assigned in initCanvas)
 let canvas, ctx;
 
-// ─────────────────────────────────────────────
-//  TOKEN
-// ─────────────────────────────────────────────
-function saveToken() {
-    const val = document.getElementById('hf-token').value.trim();
-    if (!val.startsWith('hf_')) {
-        document.getElementById('token-status').textContent = '❌ Token should start with hf_';
-        document.getElementById('token-status').style.color = '#f44336';
-        return;
-    }
-    localStorage.setItem('hf_token', val);
-    document.getElementById('token-status').textContent = '✅ Token saved!';
-    document.getElementById('token-status').style.color = '#4CAF50';
-}
 
+// ── INIT ──────────────────────────────────────────────────────────────────────
+
+/**
+ * On page load:
+ *  - Restore persisted API keys from localStorage
+ *  - Set up the canvas and render the empty timeline
+ */
 window.addEventListener('load', () => {
-    const saved = localStorage.getItem('hf_token');
-    if (saved) {
-        document.getElementById('hf-token').value = saved;
-        document.getElementById('token-status').textContent = '✅ Token loaded';
-        document.getElementById('token-status').style.color = '#4CAF50';
-    }
+    const aaiKey   = localStorage.getItem('aai_token');
+    if (aaiKey) document.getElementById('hf-key').value = aaiKey;
+
+    const rapidKey = localStorage.getItem('rapid_key');
+    if (rapidKey) document.getElementById('rapid-key').value = rapidKey;
+
     initCanvas();
+    renderCanvas(0); // draw empty lane grid so it doesn't look blank at startup
 });
 
-// ─────────────────────────────────────────────
-//  FILE HANDLING
-// ─────────────────────────────────────────────
-const dropZone  = document.getElementById('drop-zone');
-const audioInput = document.getElementById('audio-input');
 
-dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
-dropZone.addEventListener('drop', e => {
+// ── FILE LOADING ──────────────────────────────────────────────────────────────
+
+const dz = document.getElementById('drop-zone');
+
+// Change border to white while a file is hovering over the drop zone
+dz.addEventListener('dragover', e => {
     e.preventDefault();
-    dropZone.classList.remove('drag-over');
-    const file = e.dataTransfer.files[0];
-    if (file) loadAudioFile(file);
-});
-audioInput.addEventListener('change', e => {
-    if (e.target.files[0]) loadAudioFile(e.target.files[0]);
+    dz.style.borderColor = '#fff';
 });
 
-function loadAudioFile(file) {
+// Restore pink border when drag leaves the zone
+dz.addEventListener('dragleave', () => {
+    dz.style.borderColor = '#E91E63';
+});
+
+// Accept the dropped file
+dz.addEventListener('drop', e => {
+    e.preventDefault();
+    dz.style.borderColor = '#E91E63';
+    if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+});
+
+// Also handle the hidden <input type="file"> change event
+document.getElementById('fi').addEventListener('change', e => {
+    if (e.target.files[0]) loadFile(e.target.files[0]);
+});
+
+/**
+ * Store the loaded audio file reference and unlock the Analyse button.
+ * Called both from drag-drop and from the YouTube fetch path.
+ * @param {File} file
+ */
+function loadFile(file) {
     audioFile = file;
-    document.getElementById('file-name').textContent = '🎵 ' + file.name;
-    document.getElementById('analyse-btn').disabled = false;
-    ensureAudioCtx();
+    document.getElementById('fname').textContent     = '🎵 ' + file.name;
+    document.getElementById('analyse-btn').disabled  = false;
+    document.getElementById('big-word').textContent  = '🎵';
+    document.getElementById('big-word').className    = '';
 
-    const reader = new FileReader();
-    reader.onload = e => {
-        audioCtx.decodeAudioData(e.target.result.slice(0), buf => {
-            audioBuffer = buf;
-        });
-    };
-    reader.readAsArrayBuffer(file);
+    // Re-enable the YouTube fetch button in case it was used for this file
+    const ytBtn = document.getElementById('yt-btn');
+    if (ytBtn) ytBtn.disabled = false;
 }
 
-// ─────────────────────────────────────────────
-//  AUDIO CONTEXT
-// ─────────────────────────────────────────────
-function ensureAudioCtx() {
+
+// ── YOUTUBE → MP3 VIA RAPIDAPI ────────────────────────────────────────────────
+
+/**
+ * Fetch a YouTube video as an MP3 blob using the RapidAPI youtube-mp36 service.
+ *
+ * Flow:
+ *  1. Extract the 11-char video ID from the pasted URL
+ *  2. Call RapidAPI → receive a time-limited CDN download link
+ *  3. Fetch the MP3 bytes from that CDN link
+ *  4. Wrap in a File object and pass to loadFile()
+ *
+ * NOTE: The MP3 CDN blocks server-side requests (Cloudflare IP filtering),
+ *       so this entire flow must happen client-side in the browser.
+ */
+window.fetchYoutube = async function() {
+    const ytUrl  = document.getElementById('yt-url').value.trim();
+    const apiKey = localStorage.getItem('rapid_key') ||
+                   document.getElementById('rapid-key').value.trim();
+
+    if (!ytUrl)  { alert('Paste a YouTube URL first!'); return; }
+    if (!apiKey) { alert('Paste your RapidAPI key first!'); return; }
+
+    // Extract the 11-character video ID from any YouTube URL format
+    const match   = ytUrl.match(/(?:v=|youtu\.be\/|embed\/)([a-zA-Z0-9_-]{11})/);
+    if (!match) { alert('Could not find YouTube video ID in that URL'); return; }
+    const videoId = match[1];
+
+    const btn = document.getElementById('yt-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳';
+    setYtStatus('⏳ Fetching from YouTube...', '#FF9800');
+
+    try {
+        // Phase 1: Ask RapidAPI for a download link
+        setYtStatus('⏳ Getting download link...', '#FF9800');
+        const rapidRes = await fetch(
+            `https://youtube-mp36.p.rapidapi.com/dl?id=${videoId}`,
+            {
+                method: 'GET',
+                headers: {
+                    'x-rapidapi-host': 'youtube-mp36.p.rapidapi.com',
+                    'x-rapidapi-key' :  apiKey,
+                }
+            }
+        );
+        const rapidData = await rapidRes.json();
+        console.log('RapidAPI response:', rapidData);
+
+        if (rapidData.status !== 'ok' || !rapidData.link) {
+            throw new Error('RapidAPI: ' + (rapidData.msg || JSON.stringify(rapidData)));
+        }
+
+        // Phase 2: Download the actual MP3 bytes from the CDN link
+        setYtStatus('⏳ Downloading MP3...', '#FF9800');
+        const audioRes = await fetch(rapidData.link);
+        if (!audioRes.ok) throw new Error('Audio download failed: ' + audioRes.status);
+
+        const audioBlob = await audioRes.blob();
+        console.log('Audio blob size (bytes):', audioBlob.size);
+
+        // Sanity check — anything under 1 KB is likely an error page
+        if (audioBlob.size < 1000) throw new Error('Audio came back empty');
+
+        const file = new File([audioBlob], `${videoId}.mp3`, { type: 'audio/mpeg' });
+        setYtStatus(
+            `✅ Got it! ${(audioBlob.size / 1024 / 1024).toFixed(1)} MB — hit DETECT NOTES`,
+            '#4CAF50'
+        );
+        btn.textContent = '✅';
+        loadFile(file);
+
+    } catch (err) {
+        setYtStatus('❌ ' + err.message, '#f44336');
+        btn.disabled    = false;
+        btn.textContent = '⬇ GET';
+        console.error('YouTube fetch error:', err);
+    }
+};
+
+/**
+ * Update the YouTube status line with a message and colour.
+ * @param {string} msg
+ * @param {string} color - CSS colour string
+ */
+function setYtStatus(msg, color) {
+    const el       = document.getElementById('yt-status');
+    el.textContent = msg;
+    el.style.color = color;
+}
+
+/**
+ * Create or resume the shared AudioContext.
+ * AudioContext must be created (or resumed) inside a user-gesture handler
+ * to satisfy browser autoplay policies.
+ * @returns {AudioContext}
+ */
+function ensureCtx() {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === 'suspended') audioCtx.resume();
     return audioCtx;
 }
 
-// ─────────────────────────────────────────────
-//  ANALYSE — Hugging Face Whisper + local pitch
-// ─────────────────────────────────────────────
-async function analyseAudio() {
-    const token = localStorage.getItem('hf_token') || document.getElementById('hf-token').value.trim();
-    if (!token) { alert('Please enter your Hugging Face API key first!'); return; }
-    if (!audioFile) { alert('Please load an audio file first!'); return; }
+
+// ── BASIC PITCH NOTE DETECTION ────────────────────────────────────────────────
+
+/**
+ * Entry point for the full analysis pipeline.
+ * Runs Basic Pitch (note detection) and AssemblyAI (lyrics) in parallel
+ * using Promise.allSettled so a lyrics failure doesn't block note detection.
+ */
+window.analyse = async function() {
+    if (!audioFile) return;
 
     const btn = document.getElementById('analyse-btn');
-    btn.disabled = true;
-    btn.textContent = '⏳ ANALYSING...';
-
-    showProgress('Step 1/2 — Transcribing lyrics...', 10);
+    btn.disabled    = true;
+    btn.textContent = '⏳ Analysing...';
+    setStatus('Starting analysis...', 5);
 
     try {
-        // Step 1 — Whisper transcription with timestamps
-        // Read file as array buffer then send raw bytes
-        const arrayBuf = await audioFile.arrayBuffer();
+        ensureCtx();
 
-        const whisperRes = await fetch(
-            'https://lingering-mouse-8c7c.tsorotes-john.workers.dev/',
-            {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'X-Wait-For-Model': 'true',
-                },
-                body: arrayBuf
-            }
-        );
+        // Decode the audio file into a raw PCM AudioBuffer
+        const ab  = await audioFile.arrayBuffer();
+        setStatus('Decoding audio...', 10);
+        const buf = await audioCtx.decodeAudioData(ab.slice(0));
+        songDuration = buf.duration * 1000; // store as ms for the RAF loop
 
-        if (!whisperRes.ok) {
-            const err = await whisperRes.text();
-            throw new Error(`Whisper ${whisperRes.status}: ${err}`);
+        // Run both analysis tasks concurrently; failures are handled individually
+        setStatus('Running Basic Pitch + AssemblyAI in parallel... ☕', 15);
+        const [noteResult, lyricResult] = await Promise.allSettled([
+            runBasicPitch(buf),
+            runAssemblyAI()
+        ]);
+
+        // ── Handle note detection result ──────────────────────────────────────
+        if (noteResult.status === 'fulfilled') {
+            pills = noteResult.value;
+        } else {
+            console.error('Basic Pitch failed:', noteResult.reason);
+            alert('Note detection failed: ' + noteResult.reason.message);
+            btn.disabled    = false;
+            btn.textContent = '🎵 DETECT NOTES';
+            hideStatus();
+            return;
         }
 
-        const whisperData = await whisperRes.json();
-        console.log('Whisper response:', whisperData);
-        showProgress('Step 2/2 — Detecting pitch...', 55);
+        // ── Handle lyrics result (optional — fail silently) ───────────────────
+        if (lyricResult.status === 'fulfilled') {
+            lyricChunks = lyricResult.value;
+            document.getElementById('hf-msg').textContent =
+                '✅ Lyrics loaded — ' + lyricChunks.length + ' words';
+        } else {
+            console.log('AssemblyAI skipped/failed:', lyricResult.reason?.message);
+            document.getElementById('hf-msg').textContent =
+                '— no lyrics (add AssemblyAI key to enable) —';
+        }
 
-        // Step 2 — Local pitch detection on audio buffer
-        const pitchMap = await detectPitchFromBuffer(audioBuffer, whisperData);
-        showProgress('Building note map...', 85);
+        // Match each lyric word to the nearest note pill by timestamp
+        assignLyrics();
 
-        // Step 3 — Build note events from whisper chunks + pitch
-        noteEvents = buildNoteEvents(whisperData, pitchMap);
-        showProgress('Done!', 100);
-
+        // All done — unlock Play and update UI
+        setStatus('Done! ' + pills.length + ' notes' +
+                  (lyricChunks.length ? ' + lyrics ✅' : ' (no lyrics)'), 100);
         setTimeout(() => {
-            hideProgress();
-            buildPills();
+            hideStatus();
             renderCanvas(0);
-            document.getElementById('play-btn').disabled = false;
-            document.getElementById('lyric-line').textContent = '▶ Ready — hit PLAY!';
-            document.getElementById('note-line').textContent = noteEvents.length + ' notes detected';
-            btn.textContent = '✅ ANALYSED';
-        }, 600);
+            document.getElementById('play-btn').disabled   = false;
+            document.getElementById('big-word').textContent = lyricChunks.length ? '🎤 READY' : '▶ READY';
+            btn.textContent = '✅ DONE';
+        }, 800);
 
-    } catch(err) {
-        hideProgress();
-        btn.disabled = false;
-        btn.textContent = '🔍 ANALYSE VOCALS';
-        alert('Analysis failed: ' + err.message + '\n\nMake sure your API key is correct and the model is loaded.');
+    } catch (err) {
+        hideStatus();
+        btn.disabled    = false;
+        btn.textContent = '🎵 DETECT NOTES';
+        alert('Error: ' + err.message);
         console.error(err);
     }
+};
+
+/**
+ * Run the Spotify Basic Pitch model on a decoded AudioBuffer.
+ *
+ * Steps:
+ *  1. Resample to 22 050 Hz (model's required sample rate)
+ *  2. Run the TF.js model chunk-by-chunk (progress callbacks update the status bar)
+ *  3. Convert raw frame/onset/contour matrices → note event objects
+ *  4. Merge very-close same-lane notes to reduce fragmentation
+ *
+ * @param {AudioBuffer} buf - Decoded audio at any sample rate
+ * @returns {Promise<Array>} Array of pill objects ready for rendering
+ */
+async function runBasicPitch(buf) {
+    setStatus('⬇ Downloading Spotify model (~50 MB first time)...', 18);
+    const resampled = await resample(buf, 22050); // model requires exactly 22 050 Hz
+
+    setStatus('🧠 Basic Pitch detecting notes...', 24);
+
+    // Accumulate frame / onset / contour tensors from each model chunk
+    const frames = [], onsets = [], contours = [];
+    const bp = new BasicPitch('https://unpkg.com/@spotify/basic-pitch@1.0.1/model/model.json');
+
+    await bp.evaluateModel(
+        resampled,
+        (f, o, c) => { frames.push(...f); onsets.push(...o); contours.push(...c); },
+        p => setStatus(
+            `🧠 Basic Pitch: ${Math.round(p * 100)}%  🎤 AssemblyAI transcribing...`,
+            24 + p * 55
+        )
+    );
+
+    // Decode model output into a list of note events with timing + MIDI pitch
+    // Thresholds: onset 0.25, frame 0.25, min 5 frames (~50 ms) — filters noise
+    const raw = noteFramesToTime(
+        addPitchBendsToNoteEvents(
+            contours,
+            outputToNotesPoly(frames, onsets, 0.25, 0.25, 5)
+        )
+    );
+
+    // ── Build pill array ───────────────────────────────────────────────────────
+    const merged = [];
+    raw
+        .filter(n => n.durationSeconds > 0.08 && n.amplitude > 0.25) // drop very short / quiet notes
+        .forEach(n => {
+            const lane   = Math.max(0, Math.min(N_LANES - 1, n.pitchMidi - LANE_BASE_MIDI));
+            const timeMs = n.startTimeSeconds * 1000;
+            const durMs  = Math.max(n.durationSeconds * 1000, 120); // minimum visible pill width
+            const note   = midiToName(n.pitchMidi);
+            const last   = merged[merged.length - 1];
+
+            // Merge into the previous pill if same lane AND gap < 60 ms
+            // (avoids visual stutter from tiny silences within a held note)
+            if (last && last.lane === lane && timeMs - (last.timeMs + last.durMs) < 60) {
+                last.durMs = (timeMs + durMs) - last.timeMs;
+            } else {
+                merged.push({
+                    timeMs,
+                    durMs,
+                    note,
+                    lane,
+                    midi: n.pitchMidi,
+                    lyric: note,    // will be overwritten by assignLyrics() if lyrics available
+                    state: 'upcoming',
+                    triggered: false
+                });
+            }
+        });
+    return merged;
 }
 
-// ─────────────────────────────────────────────
-//  PITCH DETECTION ON FULL BUFFER
-// ─────────────────────────────────────────────
-async function detectPitchFromBuffer(buffer, whisperData) {
-    const sampleRate = buffer.sampleRate;
-    const data = buffer.getChannelData(0);
-    const chunkSize = 2048;
-    const hopSize = 1024; // overlap for better resolution
-    const pitchMap = []; // [{timeMs, note}]
 
-    const totalChunks = Math.floor((data.length - chunkSize) / hopSize);
-    for (let i = 0; i < totalChunks; i++) {
-        const chunk = data.slice(i * hopSize, i * hopSize + chunkSize);
-        const freq = autoCorrelate(chunk, sampleRate);
-        const note = getClosestNote(freq);
-        const timeMs = (i * hopSize / sampleRate) * 1000;
-        if (note) pitchMap.push({ timeMs, note });
-    }
-    return pitchMap;
-}
+// ── ASSEMBLYAI TRANSCRIPTION ──────────────────────────────────────────────────
 
-function autoCorrelate(buffer, sampleRate) {
-    const SIZE = buffer.length;
-    const MAX_SAMPLES = Math.floor(SIZE / 2);
-    let rms = 0;
-    for (let i = 0; i < SIZE; i++) rms += buffer[i] * buffer[i];
-    rms = Math.sqrt(rms / SIZE);
-    if (rms < 0.008) return -1;
+/**
+ * Upload the audio file to AssemblyAI and poll until word-level
+ * transcription is complete.
+ *
+ * Returns an array of { timestamp: [startSec, endSec], text: word } objects
+ * that match AssemblyAI's word-level response shape, normalised to seconds.
+ *
+ * Throws if: no token found, upload fails, transcription errors, or timeout.
+ * @returns {Promise<Array<{timestamp:[number,number], text:string}>>}
+ */
+async function runAssemblyAI() {
+    const token = localStorage.getItem('aai_token');
+    if (!token) throw new Error('No AssemblyAI token');
 
-    let best_offset = -1, best_correlation = 0, lastCorrelation = 1;
-    for (let offset = 1; offset < MAX_SAMPLES; offset++) {
-        let correlation = 0;
-        for (let i = 0; i < MAX_SAMPLES; i++) correlation += Math.abs(buffer[i] - buffer[i + offset]);
-        correlation = 1 - correlation / MAX_SAMPLES;
-        if (correlation > 0.8 && correlation > lastCorrelation && correlation > best_correlation) {
-            best_correlation = correlation;
-            best_offset = offset;
-        }
-        lastCorrelation = correlation;
-    }
-    return best_correlation > 0.01 ? sampleRate / best_offset : -1;
-}
-
-function getClosestNote(freq) {
-    if (freq < 60 || freq > 1200) return null;
-    let closest = null, minDiff = Infinity;
-    for (const [note, noteFreq] of Object.entries(NOTE_FREQS)) {
-        const diff = Math.abs(freq - noteFreq);
-        if (diff < minDiff) { minDiff = diff; closest = note; }
-    }
-    return minDiff < NOTE_FREQS[closest] * 0.07 ? closest : null;
-}
-
-// ─────────────────────────────────────────────
-//  BUILD NOTE EVENTS from Whisper + PitchMap
-// ─────────────────────────────────────────────
-function buildNoteEvents(whisperData, pitchMap) {
-    const events = [];
-
-    // Whisper returns chunks with timestamps
-    const chunks = whisperData.chunks || [];
-
-    chunks.forEach((chunk, i) => {
-        const startMs  = (chunk.timestamp?.[0] ?? 0) * 1000;
-        const endMs    = (chunk.timestamp?.[1] ?? startMs + 500) * 1000;
-        const durMs    = Math.max(endMs - startMs, 200);
-        const lyric    = chunk.text?.trim() ?? '';
-
-        // Find dominant note in this time window from pitchMap
-        const windowNotes = pitchMap.filter(p => p.timeMs >= startMs && p.timeMs < endMs);
-        const note = dominantNote(windowNotes);
-
-        if (lyric) {
-            events.push({ timeMs: startMs, durMs, lyric, note });
-        }
+    // Step 1 — Upload raw audio bytes; AssemblyAI returns a hosted URL
+    const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', {
+        method: 'POST',
+        headers: {
+            'authorization'  : token,
+            'content-type'   : 'application/octet-stream'
+        },
+        body: audioFile
     });
+    if (!uploadRes.ok)
+        throw new Error('AAI upload failed: ' + uploadRes.status + ' ' + await uploadRes.text());
 
-    return events;
-}
+    const { upload_url } = await uploadRes.json();
+    console.log('AAI uploaded to:', upload_url);
 
-function dominantNote(notes) {
-    if (!notes.length) return null;
-    const counts = {};
-    notes.forEach(n => { counts[n.note] = (counts[n.note] || 0) + 1; });
-    return Object.entries(counts).sort((a,b) => b[1]-a[1])[0]?.[0] ?? null;
-}
-
-// ─────────────────────────────────────────────
-//  CANVAS
-// ─────────────────────────────────────────────
-function initCanvas() {
-    canvas = document.getElementById('vocal-canvas');
-    ctx = canvas.getContext('2d');
-    resizeCanvas();
-    window.addEventListener('resize', () => { resizeCanvas(); if (!isPlaying) renderCanvas(0); });
-}
-
-function resizeCanvas() {
-    canvas.width  = canvas.offsetWidth  || 600;
-    canvas.height = canvas.offsetHeight || 260;
-}
-
-// ─────────────────────────────────────────────
-//  PILLS
-// ─────────────────────────────────────────────
-function buildPills() {
-    pills = noteEvents.map(ev => ({
-        ...ev,
-        state: 'upcoming',
-        triggered: false,
-        lane: noteToLane(ev.note),
-    }));
-}
-
-function noteToLane(note) {
-    if (!note) return 3; // middle
-    // Find closest vocal lane
-    const noteFreq = NOTE_FREQS[note];
-    if (!noteFreq) return 3;
-    let closest = 0, minDiff = Infinity;
-    VOCAL_LANES.forEach((ln, i) => {
-        const diff = Math.abs(NOTE_FREQS[ln] - noteFreq);
-        if (diff < minDiff) { minDiff = diff; closest = i; }
+    // Step 2 — Request transcription with word-level timestamps
+    const transcriptRes = await fetch('https://api.assemblyai.com/v2/transcript', {
+        method: 'POST',
+        headers: {
+            'authorization': token,
+            'content-type' : 'application/json'
+        },
+        body: JSON.stringify({
+            audio_url    : upload_url,
+            speech_models: ['universal-2'] // highest accuracy model
+        })
     });
-    return closest;
-}
+    const transcriptBody = await transcriptRes.text();
+    console.log('AAI transcript request status:', transcriptRes.status, transcriptBody);
+    if (!transcriptRes.ok)
+        throw new Error('AAI transcript request failed: ' + transcriptRes.status + ' ' + transcriptBody);
 
-// ─────────────────────────────────────────────
-//  DRAW
-// ─────────────────────────────────────────────
-function drawPillShape(x, y, w, h, r) {
-    r = Math.min(r, h/2, w/2);
-    ctx.beginPath();
-    ctx.moveTo(x+r, y);
-    ctx.lineTo(x+w-r, y);
-    ctx.arcTo(x+w, y, x+w, y+r, r);
-    ctx.lineTo(x+w, y+h-r);
-    ctx.arcTo(x+w, y+h, x+w-r, y+h, r);
-    ctx.lineTo(x+r, y+h);
-    ctx.arcTo(x, y+h, x, y+h-r, r);
-    ctx.lineTo(x, y+r);
-    ctx.arcTo(x, y, x+r, y, r);
-    ctx.closePath();
-}
+    const { id } = JSON.parse(transcriptBody);
+    console.log('AAI transcript job ID:', id);
 
-function renderCanvas(elapsed) {
-    elapsed = elapsed ?? 0;
-    const W = canvas.width, H = canvas.height;
-    const laneH = H / VOCAL_LANES.length;
-    const hitX  = W * 0.22;
-    const ppm   = (W - hitX) / 4000; // 4 seconds visible ahead
+    // Step 3 — Poll every 3 s for up to 3 minutes (60 × 3 s)
+    for (let i = 0; i < 60; i++) {
+        await new Promise(r => setTimeout(r, 3000));
 
-    ctx.clearRect(0, 0, W, H);
+        const pollRes = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, {
+            headers: { 'authorization': token }
+        });
+        const data = await pollRes.json();
+        console.log('AAI poll status:', data.status);
 
-    // Lanes
-    for (let i = 0; i < VOCAL_LANES.length; i++) {
-        const y = i * laneH;
-        ctx.fillStyle = i % 2 === 0 ? '#0d0d0d' : '#0f0f0f';
-        ctx.fillRect(0, y, W, laneH);
+        if (data.status === 'completed') {
+            const words = data.words || [];
+            console.log('AAI sample words:', words.slice(0, 5));
 
-        // Lane label
-        ctx.fillStyle = '#2a2a2a';
-        ctx.font = 'bold 11px Courier New';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(VOCAL_LANES[i], 6, y + laneH/2);
-
-        // Divider
-        ctx.strokeStyle = '#181818';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(0, (i+1) * laneH);
-        ctx.lineTo(W, (i+1) * laneH);
-        ctx.stroke();
+            // Normalise: convert start/end from ms to seconds
+            return words.map(w => ({
+                timestamp: [w.start / 1000, w.end / 1000],
+                text: w.text
+            }));
+        }
+        if (data.status === 'error') throw new Error('AAI error: ' + data.error);
     }
+    throw new Error('AAI timed out after 3 minutes');
+}
 
-    // Pills
+/**
+ * Resample an AudioBuffer to a target sample rate using the OfflineAudioContext.
+ * Basic Pitch requires exactly 22 050 Hz input.
+ * @param {AudioBuffer} buf
+ * @param {number} rate - Target sample rate in Hz
+ * @returns {Promise<AudioBuffer>}
+ */
+async function resample(buf, rate) {
+    const ctx2 = new OfflineAudioContext(1, Math.ceil(buf.duration * rate), rate);
+    const src  = ctx2.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx2.destination);
+    src.start(0);
+    return ctx2.startRendering();
+}
+
+
+// ── LYRIC ASSIGNMENT ──────────────────────────────────────────────────────────
+
+/**
+ * Explode lyricChunks (which may span multiple words) into a flat word-map
+ * where each entry has a precise start/end in milliseconds.
+ *
+ * When a chunk contains multiple words, the duration is divided evenly
+ * between them (AssemblyAI gives chunk-level not sub-word timestamps).
+ *
+ * @returns {Array<{startMs:number, endMs:number, word:string}>}
+ */
+function buildWordMap() {
+    const wordMap = [];
+    lyricChunks.forEach(chunk => {
+        const startMs = (chunk.timestamp?.[0] ?? 0) * 1000;
+        const endMs   = (chunk.timestamp?.[1] ?? startMs + 500) * 1000;
+        const words   = chunk.text?.trim().split(/\s+/).filter(Boolean) || [];
+        if (!words.length) return;
+
+        const durPerWord = (endMs - startMs) / words.length;
+        words.forEach((word, i) => {
+            wordMap.push({
+                startMs: startMs + i * durPerWord,
+                endMs  : startMs + (i + 1) * durPerWord,
+                word
+            });
+        });
+    });
+    return wordMap;
+}
+
+/** Flat word-level timing map, populated by assignLyrics(). */
+let wordMap = [];
+
+/**
+ * Match each pill to the nearest lyric word by start timestamp,
+ * then store that word as pill.lyric for canvas rendering.
+ */
+function assignLyrics() {
+    if (!lyricChunks.length) return;
+    wordMap = buildWordMap();
+    console.log('Word map built:', wordMap.length, 'words');
+    if (!wordMap.length) return;
+
     pills.forEach(p => {
-        const timeUntil = p.timeMs - elapsed;
-        const x   = hitX + timeUntil * ppm;
-        const pw  = Math.max(p.durMs * ppm - 4, 36);
-        const lY  = p.lane * laneH;
-        const ph  = laneH * 0.72;
-        const py  = lY + (laneH - ph) / 2;
-
-        if (x > W + pw || x + pw < -40) return;
-
-        let color = p.note ? LANE_COLORS[p.lane] : '#333';
-        if (p.state === 'hit')    color = '#ffffff';
-        if (p.state === 'missed') color = '#1e1e1e';
-
-        // Glow on approach
-        if (p.state === 'upcoming' && timeUntil >= 0 && timeUntil < 400) {
-            ctx.shadowColor = color;
-            ctx.shadowBlur  = 14;
-        }
-
-        ctx.fillStyle = color;
-        drawPillShape(ctx, x, py, pw, ph, ph/2);
-        ctx.fill();
-        ctx.shadowBlur = 0;
-
-        // Lyric text
-        const fontSize = Math.min(ph * 0.45, 14);
-        ctx.font = `bold ${fontSize}px Courier New`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillStyle = p.state === 'missed' ? '#333' : (p.state === 'hit' ? '#000' : '#000');
-        // Clip text to pill width
-        const maxW = pw - 8;
-        let lyric = p.lyric;
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(x, py, pw, ph);
-        ctx.clip();
-        ctx.fillText(lyric, x + pw/2, py + ph/2);
-        ctx.restore();
+        let closest = null, minDiff = Infinity;
+        wordMap.forEach(w => {
+            const diff = Math.abs(p.timeMs - w.startMs);
+            if (diff < minDiff) { minDiff = diff; closest = w; }
+        });
+        if (closest) p.lyric = closest.word;
     });
 
-    // Hit line
-    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([5,5]);
-    ctx.beginPath();
-    ctx.moveTo(hitX, 0);
-    ctx.lineTo(hitX, H);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Hit dots
-    for (let i = 0; i < VOCAL_LANES.length; i++) {
-        ctx.fillStyle = 'rgba(255,255,255,0.1)';
-        ctx.beginPath();
-        ctx.arc(hitX, i * laneH + laneH/2, 4, 0, Math.PI*2);
-        ctx.fill();
-    }
+    // Note: consecutive pills may share the same lyric (held note across syllable)
+    // — this is intentional; de-duplication would incorrectly drop lyrics.
 }
 
-// ─────────────────────────────────────────────
-//  RAF LOOP
-// ─────────────────────────────────────────────
-function rafLoop() {
-    if (!isPlaying) return;
-    const elapsed = (performance.now() - startTime) * speedMult;
-
-    // Update pill states
-    pills.forEach(p => {
-        if (!p.triggered && elapsed >= p.timeMs) {
-            p.triggered = true;
-            // Show lyric
-            document.getElementById('lyric-line').textContent = p.lyric;
-            document.getElementById('note-line').textContent  = p.note || '';
-            if (micStream) currentExpected = p.note;
-            // Auto-miss after duration
-            setTimeout(() => {
-                if (p.state === 'upcoming') p.state = 'missed';
-                if (currentExpected === p.note) currentExpected = null;
-            }, p.durMs / speedMult);
-        }
-    });
-
-    // Check end
-    const lastEvent = noteEvents[noteEvents.length - 1];
-    if (lastEvent && elapsed > lastEvent.timeMs + lastEvent.durMs + 500) {
-        if (isLooping) {
-            startTime = performance.now();
-            buildPills();
-            renderCanvas(0);
-            rafId = requestAnimationFrame(rafLoop);
-            return;
-        } else {
-            stop();
-            return;
-        }
-    }
-
-    renderCanvas(elapsed);
-    rafId = requestAnimationFrame(rafLoop);
+/**
+ * Return the word currently active at a given playback position.
+ * @param {number} elapsed - Milliseconds since playback start
+ * @returns {{startMs:number, endMs:number, word:string}|null}
+ */
+function getCurrentWord(elapsed) {
+    if (!wordMap.length) return null;
+    return wordMap.find(w => elapsed >= w.startMs && elapsed < w.endMs) || null;
 }
 
-// ─────────────────────────────────────────────
-//  PLAY / STOP
-// ─────────────────────────────────────────────
-function play() {
-    if (!noteEvents.length) return;
-    ensureAudioCtx();
 
-    // Play audio file
-    if (audioBuffer) {
-        if (sourceNode) { try { sourceNode.stop(); } catch(e){} }
-        sourceNode = audioCtx.createBufferSource();
-        sourceNode.buffer = audioBuffer;
-        sourceNode.playbackRate.value = speedMult;
-        sourceNode.connect(audioCtx.destination);
-        sourceNode.start(0);
-    }
+// ── MICROPHONE SETUP ──────────────────────────────────────────────────────────
 
-    isPlaying = true;
-    buildPills();
-    startTime = performance.now();
-    document.getElementById('play-btn').disabled = true;
-    document.getElementById('stop-btn').disabled = false;
-    document.getElementById('lyric-line').textContent = '🎤';
-    if (rafId) cancelAnimationFrame(rafId);
-    rafId = requestAnimationFrame(rafLoop);
-}
+/**
+ * Request microphone permission and wire up the Web Audio processing graph:
+ *
+ *   MediaStreamSource → GainNode → AnalyserNode → ScriptProcessorNode → destination
+ *
+ * The ScriptProcessorNode fires processMic() for every audio block,
+ * which runs autocorrelation to detect the sung pitch.
+ *
+ * Raw processing is done via ScriptProcessor rather than AudioWorklet for
+ * maximum browser compatibility (iOS Safari, older Chrome).
+ */
+window.initMic = async function() {
+    if (micStream) return; // already initialised — do nothing
 
-function stop() {
-    isPlaying = false;
-    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
-    if (sourceNode) { try { sourceNode.stop(); } catch(e){} sourceNode = null; }
-    document.getElementById('play-btn').disabled = false;
-    document.getElementById('stop-btn').disabled = true;
-    document.getElementById('lyric-line').textContent = '— stopped —';
-    document.getElementById('note-line').textContent = '';
-    document.getElementById('expected-val').textContent = '—';
-    currentExpected = null;
-    wrongFrames = 0;
-    document.body.style.backgroundColor = '#0a0a0a';
-    buildPills();
-    renderCanvas(0);
-}
-
-function toggleLoop() {
-    isLooping = !isLooping;
-    const btn = document.getElementById('loop-btn');
-    btn.textContent = isLooping ? '🔁 ON' : '🔁 LOOP';
-    btn.style.background = isLooping ? '#FF9800' : '#333';
-}
-
-function setSpeed(mult, btn) {
-    speedMult = mult;
-    document.querySelectorAll('.speed-btns button').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    if (sourceNode) sourceNode.playbackRate.value = mult;
-}
-
-// ─────────────────────────────────────────────
-//  MICROPHONE
-// ─────────────────────────────────────────────
-async function initMic() {
     try {
-        ensureAudioCtx();
+        ensureCtx();
+
+        // Larger FFT size = better frequency resolution for lower notes
         analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 2048;
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const mic = audioCtx.createMediaStreamSource(micStream);
-        scriptProc = audioCtx.createScriptProcessor(2048, 1, 1);
-        const gainNode = audioCtx.createGain();
-        gainNode.gain.value = parseFloat(document.getElementById('mic-boost').value) || 3.0;
-        window._gainNode = gainNode;
+        analyser.fftSize = 4096;
+
+        // Disable browser processing that would corrupt pitch analysis
+        micStream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+                echoCancellation  : false,
+                noiseSuppression  : false,
+                autoGainControl   : false
+            }
+        });
+
+        const mic   = audioCtx.createMediaStreamSource(micStream);
+        scriptProc  = audioCtx.createScriptProcessor(2048, 1, 1);
+        gainNode    = audioCtx.createGain();
+        gainNode.gain.value = +document.getElementById('mic-boost').value || 3;
+        window._gainNode    = gainNode; // exposed so the boost slider can update it
+
+        // Connect the audio graph
         mic.connect(gainNode);
         gainNode.connect(analyser);
         analyser.connect(scriptProc);
         scriptProc.connect(audioCtx.destination);
-        scriptProc.onaudioprocess = processMicAudio;
-        document.getElementById('mic-val').textContent = 'ON';
+        scriptProc.onaudioprocess = processMic;
+
+        // Update UI to reflect active mic state
+        document.getElementById('mic-v').textContent          = 'ON';
         document.getElementById('mic-stat').classList.add('on');
-        document.getElementById('mic-btn').disabled = true;
-    } catch(err) {
-        alert('Mic error: ' + err.message);
+        document.getElementById('mic-btn').textContent        = '🎤 ON';
+        document.getElementById('mic-btn').disabled           = true;
+
+    } catch (e) {
+        alert('Mic error: ' + e.message);
     }
+};
+
+
+// ── PITCH DETECTION ───────────────────────────────────────────────────────────
+
+/**
+ * Normalised Sum of Absolute Differences (NSAD) autocorrelation.
+ * A time-domain approach that is accurate enough for single-voice singing
+ * and computationally cheap compared to FFT-based methods.
+ *
+ * Returns the fundamental frequency in Hz, or -1 if the signal is too quiet
+ * or no clear periodic component is found.
+ *
+ * @param {Float32Array} buf - PCM samples (mono, full AnalyserNode frame)
+ * @param {number} sr        - Sample rate in Hz
+ * @returns {number} Frequency in Hz, or -1
+ */
+function autoCorrelate(buf, sr) {
+    const SIZE = buf.length;
+    const MAX  = Math.floor(SIZE / 2);
+
+    // RMS energy gate — ignore frames that are silent / below noise floor
+    let rms = 0;
+    for (let i = 0; i < SIZE; i++) rms += buf[i] * buf[i];
+    rms = Math.sqrt(rms / SIZE);
+    if (rms < 0.008) return -1;
+
+    // Find the lag offset (period) with the highest autocorrelation
+    let bestOffset = -1, bestCorr = 0, lastCorr = 1;
+    for (let o = 1; o < MAX; o++) {
+        let c = 0;
+        for (let i = 0; i < MAX; i++) c += Math.abs(buf[i] - buf[i + o]);
+        c = 1 - c / MAX; // normalise to 0–1
+
+        // Accept only a clear peak above 0.8 — prevents octave errors
+        if (c > 0.8 && c > lastCorr && c > bestCorr) {
+            bestCorr   = c;
+            bestOffset = o;
+        }
+        lastCorr = c;
+    }
+
+    return bestCorr > 0.01 ? sr / bestOffset : -1;
 }
 
-function processMicAudio() {
-    const buffer = new Float32Array(analyser.fftSize);
-    analyser.getFloatTimeDomainData(buffer);
+/**
+ * Convert a frequency (Hz) to a MIDI-based note name.
+ * Only handles the vocal range 60 Hz (B1) – 1200 Hz (~D6).
+ * @param {number} f - Frequency in Hz
+ * @returns {{name:string, midi:number}|null}
+ */
+function freqToNote(f) {
+    if (f < 60 || f > 1200) return null;
+    const midi = Math.round(12 * Math.log2(f / 440) + 69);
+    return { name: midiToName(midi), midi };
+}
 
+/** Number of recent mic frames kept for majority-vote smoothing. */
+const NOTE_HISTORY = 8;
+
+/** Ring buffer of recent detected note names (or null for silence). */
+let noteHistory = [];
+
+/**
+ * Majority-vote smoother over the last NOTE_HISTORY mic frames.
+ * Returns a note name only when it appears in ≥ half the frames,
+ * which eliminates transient misdetections between notes.
+ * @returns {string|null} Smoothed note name, e.g. "A4", or null
+ */
+function smoothedNote() {
+    if (!noteHistory.length) return null;
+    const counts = {};
+    noteHistory.forEach(n => { if (n) counts[n] = (counts[n] || 0) + 1; });
+    const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    return best && best[1] >= NOTE_HISTORY / 2 ? best[0] : null;
+}
+
+/**
+ * ScriptProcessorNode callback — runs for every 2048-sample audio block.
+ *
+ * Pipeline per block:
+ *  1. Compute RMS to gate silence
+ *  2. Autocorrelate to find fundamental frequency
+ *  3. Convert Hz → note name
+ *  4. Push to smoothing history
+ *  5. Compare smoothed note to currentExpected → update UI colours
+ *  6. Mark matched pill as 'hit' on the canvas
+ */
+function processMic() {
+    if (!analyser) return;
+
+    const buf = new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(buf);
+
+    // Compute RMS for the voice-activity check
     let rms = 0;
-    for (let i = 0; i < buffer.length; i++) rms += buffer[i] * buffer[i];
-    rms = Math.sqrt(rms / buffer.length);
+    for (let i = 0; i < buf.length; i++) rms += buf[i] * buf[i];
+    rms = Math.sqrt(rms / buf.length);
 
-    if (rms > 0.01) {
-        const freq     = autoCorrelate(buffer, audioCtx.sampleRate);
-        const detected = getClosestNote(freq);
-        document.getElementById('detected-val').textContent = detected ?? '~';
-        document.getElementById('expected-val').textContent = currentExpected ?? '—';
+    const wordEl = document.getElementById('big-word');
+    const noteEl = document.getElementById('note-name');
 
-        if (detected && currentExpected) {
-            // Strip octave for comparison — C4 == C5 acceptable for singing
-            const detectedBase  = detected.replace(/\d/, '');
-            const expectedBase  = currentExpected.replace(/\d/, '');
-            const correct = detectedBase === expectedBase;
+    if (rms > 0.01) { // voice detected
+        const freq     = autoCorrelate(buf, audioCtx.sampleRate);
+        const det      = freqToNote(freq);
 
-            if (correct) {
+        // Push into the smoothing ring buffer
+        noteHistory.push(det?.name ?? null);
+        if (noteHistory.length > NOTE_HISTORY) noteHistory.shift();
+        const smoothed = smoothedNote();
+
+        // Update "YOU" stat and sung-note display
+        document.getElementById('you-v').textContent    = smoothed ?? (det?.name ?? '~');
+        document.getElementById('sung-note').textContent = smoothed ?? (det?.name ?? '~');
+
+        if (smoothed && currentExpected) {
+            const detMidi = nameToMidi(smoothed);
+            const expMidi = nameToMidi(currentExpected);
+            const diff    = detMidi - expMidi; // positive = sung too high
+
+            if (Math.abs(diff) <= 1) {
+                // Within ±1 semitone — green
+                wordEl.className = noteEl.className = 'correct';
                 wrongFrames = 0;
-                document.body.style.backgroundColor = '#0a0a0a';
-                // Mark current pill hit
+
+                // Mark the currently active pill as 'hit' so it turns white
                 pills.forEach(p => {
                     if (p.triggered && p.state === 'upcoming' && p.note === currentExpected) {
                         p.state = 'hit';
                     }
                 });
-            } else {
+
+            } else if (diff > 1) {
+                // Sung pitch is above the target — yellow
+                // Only change colour after WRONG_THRESH consecutive wrong frames
+                // to avoid distracting flickers during pitch transitions.
+                wordEl.className = noteEl.className = 'too-high';
                 wrongFrames++;
-                if (wrongFrames >= WRONG_THRESH) document.body.style.backgroundColor = '#1a0000';
+
+            } else {
+                // Sung pitch is below the target — red
+                wordEl.className = noteEl.className = 'too-low';
+                wrongFrames++;
             }
         } else {
-            wrongFrames = 0;
-            document.body.style.backgroundColor = '#0a0a0a';
+            // Note detected but no expected reference (between pills) — clear colour
+            wordEl.className = noteEl.className = '';
         }
+
     } else {
+        // Below RMS threshold — silence / breath
+        noteHistory.push(null);
+        if (noteHistory.length > NOTE_HISTORY) noteHistory.shift();
+        document.getElementById('you-v').textContent     = '—';
+        document.getElementById('sung-note').textContent = '—';
+        wordEl.className = noteEl.className = '';
         wrongFrames = 0;
-        document.getElementById('detected-val').textContent = '—';
-        document.body.style.backgroundColor = '#0a0a0a';
     }
 }
 
-// ─────────────────────────────────────────────
-//  PROGRESS
-// ─────────────────────────────────────────────
-function showProgress(label, pct) {
-    document.getElementById('progress-wrap').style.display = 'block';
-    document.getElementById('progress-label').textContent  = label;
-    document.getElementById('progress-bar').style.width    = pct + '%';
+
+// ── PLAYBACK ──────────────────────────────────────────────────────────────────
+
+/**
+ * Start song playback from the beginning.
+ * Decodes the audio file fresh each time so the AudioBuffer is not reused
+ * across multiple plays (some browsers do not allow re-use after the source
+ * has been stopped).
+ */
+window.play = function() {
+    if (!pills.length) { alert('Detect notes first!'); return; }
+    ensureCtx();
+
+    // Reset all pill states so the canvas starts clean
+    pills.forEach(p => { p.state = 'upcoming'; p.triggered = false; });
+
+    const reader = new FileReader();
+    reader.onload = e => {
+        audioCtx.decodeAudioData(e.target.result, buf => {
+            songDuration = buf.duration * 1000;
+
+            // Stop any currently playing source before creating a new one
+            if (sourceNode) { try { sourceNode.stop(); } catch (_) {} }
+
+            sourceNode = audioCtx.createBufferSource();
+            sourceNode.buffer = buf;
+            sourceNode.connect(audioCtx.destination);
+            sourceNode.start(0);
+
+            isPlaying = true;
+            startTime = performance.now();
+
+            document.getElementById('play-btn').disabled  = true;
+            document.getElementById('stop-btn').disabled  = false;
+            document.getElementById('big-word').textContent = '🎤';
+            document.getElementById('big-word').className   = '';
+
+            if (rafId) cancelAnimationFrame(rafId);
+            rafId = requestAnimationFrame(loop);
+        });
+    };
+    reader.readAsArrayBuffer(audioFile);
+};
+
+/**
+ * Stop playback and reset all UI state back to "ready to play".
+ * Called by the Stop button, the loop end handler, and implicitly by play().
+ */
+window.stop = function() {
+    isPlaying = false;
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+    if (sourceNode) { try { sourceNode.stop(); } catch (_) {} sourceNode = null; }
+
+    // Reset runtime state
+    currentExpected = null;
+    wrongFrames     = 0;
+    lastWord        = null;
+    noteHistory     = [];
+
+    // Reset UI
+    document.getElementById('play-btn').disabled           = false;
+    document.getElementById('stop-btn').disabled           = true;
+    document.getElementById('exp-v').textContent           = '—';
+    document.getElementById('big-word').textContent        = '⏹';
+    document.getElementById('big-word').className          = '';
+    document.getElementById('sung-note').textContent       = '—';
+    document.getElementById('exp-note').textContent        = '—';
+    document.getElementById('note-name').className         = '';
+    document.getElementById('song-progress-fill').style.width = '0%';
+
+    pills.forEach(p => { p.state = 'upcoming'; p.triggered = false; });
+    renderCanvas(0);
+};
+
+/**
+ * Toggle loop mode on/off.
+ * When looping, stop() is called at song end and play() is re-triggered
+ * after a 300 ms gap (prevents AudioContext issues with immediate restarts).
+ * @param {HTMLButtonElement} btn - The loop button element
+ */
+window.toggleLoop = function(btn) {
+    isLooping          = !isLooping;
+    btn.textContent    = isLooping ? '🔁 ON'   : '🔁 LOOP';
+    btn.style.background = isLooping ? '#FF9800' : '#333';
+};
+
+
+// ── RAF MAIN LOOP ─────────────────────────────────────────────────────────────
+
+/** Track the last displayed lyric word to avoid redundant DOM updates. */
+let lastWord = null;
+
+/**
+ * requestAnimationFrame tick — the heart of the playback engine.
+ *
+ * Each frame:
+ *  1. Compute elapsed time since play() was called
+ *  2. Update the song progress bar
+ *  3. Find the active lyric word and update the big display (only on change)
+ *  4. Find the nearest note pill → set currentExpected (always live, not just on trigger)
+ *  5. Trigger pills that have passed their start time → start the hit/miss timer
+ *  6. Check for end-of-song → stop or loop
+ *  7. Re-render the scrolling canvas
+ */
+function loop() {
+    if (!isPlaying) return;
+    const elapsed = performance.now() - startTime;
+
+    // ── Song progress bar ──────────────────────────────────────────────────────
+    if (songDuration) {
+        document.getElementById('song-progress-fill').style.width =
+            Math.min(100, (elapsed / songDuration) * 100) + '%';
+    }
+
+    // ── Lyric display (word-level from AssemblyAI) ─────────────────────────────
+    if (lyricChunks.length) {
+        const activeWord = lyricChunks.find(c => {
+            const s = (c.timestamp?.[0] ?? 0) * 1000;
+            const e = (c.timestamp?.[1] ?? 0) * 1000;
+            return elapsed >= s && elapsed < e;
+        });
+        const word = activeWord?.text?.trim() || '';
+        if (word !== lastWord) {
+            lastWord = word;
+            document.getElementById('big-word').textContent = word || '♪';
+            document.getElementById('big-word').className   = '';
+        }
+    }
+
+    // ── Expected note (always tracks nearest pill, not just triggered ones) ─────
+    // This ensures currentExpected is set even before a pill reaches the hit line,
+    // giving the mic feedback engine an early reference to compare against.
+    const nearestPill = pills.reduce((best, p) => {
+        const dist = Math.abs(p.timeMs - elapsed);
+        return dist < Math.abs((best?.timeMs ?? Infinity) - elapsed) ? p : best;
+    }, null);
+
+    if (nearestPill && Math.abs(nearestPill.timeMs - elapsed) < 2000) {
+        currentExpected = nearestPill.note;
+        document.getElementById('exp-v').textContent   = nearestPill.note;
+        document.getElementById('exp-note').textContent = nearestPill.note;
+    } else {
+        currentExpected = null;
+        document.getElementById('exp-note').textContent = '—';
+    }
+
+    // ── Pill trigger → hit/miss state ──────────────────────────────────────────
+    // Pills are "triggered" when playback time passes their start.
+    // A timer runs for durMs ms; if the pill is still 'upcoming' at the end,
+    // it flips to 'missed' (turns dark grey on canvas).
+    pills.forEach(p => {
+        if (!p.triggered && elapsed >= p.timeMs) {
+            p.triggered = true;
+            setTimeout(() => {
+                if (p.state === 'upcoming') p.state = 'missed';
+            }, p.durMs);
+        }
+    });
+
+    // ── End-of-song check ──────────────────────────────────────────────────────
+    // Use actual song duration rather than last pill time so the full audio
+    // plays even if the last few seconds have no detected notes.
+    const endMs = songDuration > 0
+        ? songDuration + 1000
+        : (pills[pills.length - 1]?.timeMs + pills[pills.length - 1]?.durMs + 1500 || 99999);
+
+    if (elapsed > endMs) {
+        if (isLooping) { window.stop(); setTimeout(window.play, 300); }
+        else window.stop();
+        return;
+    }
+
+    renderCanvas(elapsed);
+    rafId = requestAnimationFrame(loop);
 }
-function hideProgress() {
-    document.getElementById('progress-wrap').style.display = 'none';
+
+
+// ── CANVAS RENDERING ──────────────────────────────────────────────────────────
+
+/**
+ * Initialise the canvas element and hook into window resize.
+ * Called once on page load.
+ */
+function initCanvas() {
+    canvas = document.getElementById('vocal-canvas');
+    ctx    = canvas.getContext('2d');
+    resizeCanvas();
+    window.addEventListener('resize', () => {
+        resizeCanvas();
+        if (!isPlaying) renderCanvas(0); // redraw static grid after resize
+    });
+}
+
+/**
+ * Sync the canvas pixel dimensions to its CSS layout size.
+ * Must be called after any layout change to avoid blurry rendering.
+ */
+function resizeCanvas() {
+    canvas.width  = canvas.offsetWidth  || 600;
+    canvas.height = canvas.offsetHeight || 200;
+}
+
+/**
+ * Draw a rounded-rectangle pill shape.
+ * Canvas2D has no native roundRect in older browsers, so this manually
+ * builds the path with arcTo calls.
+ *
+ * @param {number} x - Left edge
+ * @param {number} y - Top edge
+ * @param {number} w - Width
+ * @param {number} h - Height
+ * @param {number} r - Corner radius
+ */
+function drawPill(x, y, w, h, r) {
+    r = Math.min(r, h / 2, w / 2); // clamp so pill never inverts
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.arcTo(x + w, y, x + w, y + r, r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+    ctx.lineTo(x + r, y + h);
+    ctx.arcTo(x, y + h, x, y + h - r, r);
+    ctx.lineTo(x, y + r);
+    ctx.arcTo(x, y, x + r, y, r);
+    ctx.closePath();
+}
+
+/**
+ * Render one frame of the scrolling note-timeline canvas.
+ *
+ * Layout:
+ *  - N_LANES horizontal lanes; lane 0 = C3 at bottom, lane 24 = C5 at top
+ *  - Hit line at 20% from left (hitX) — pills scroll left past this line
+ *  - Time window = 5 seconds ahead of the hit line
+ *  - Pill colour: HSL spectrum (upcoming) → white (hit) → dark grey (missed)
+ *  - Upcoming pills within 500 ms glow with a coloured shadow for emphasis
+ *
+ * @param {number} [elapsed=0] - Milliseconds since playback start
+ */
+function renderCanvas(elapsed) {
+    elapsed = elapsed ?? 0;
+    if (!canvas) return;
+
+    const W   = canvas.width;
+    const H   = canvas.height;
+    const lH  = H / N_LANES;               // pixels per lane
+    const hitX = W * 0.2;                  // x-position of the hit line
+    const ppm  = (W - hitX) / 5000;        // pixels per millisecond (5 s window)
+
+    ctx.clearRect(0, 0, W, H);
+
+    // ── Alternating lane backgrounds (very subtle) ─────────────────────────────
+    for (let i = 0; i < N_LANES; i++) {
+        ctx.fillStyle = i % 2 === 0 ? '#0b0b0b' : '#0e0e0e';
+        ctx.fillRect(0, i * lH, W, lH);
+    }
+
+    // ── Lane note labels (every 3 semitones keeps it readable) ─────────────────
+    for (let i = 0; i < N_LANES; i += 3) {
+        ctx.fillStyle    = '#222';
+        ctx.font         = '9px Courier New';
+        ctx.textAlign    = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(midiToName(LANE_BASE_MIDI + i), 3, i * lH + lH / 2);
+    }
+
+    // ── Pills ──────────────────────────────────────────────────────────────────
+    pills.forEach(p => {
+        const timeUntil = p.timeMs - elapsed;
+        const x  = hitX + timeUntil * ppm;               // scroll position
+        const pw = Math.max(p.durMs * ppm - 2, 16);      // minimum 16 px wide
+        const py = p.lane * lH + lH * 0.1;
+        const ph = lH * 0.8;
+
+        // Skip pills entirely off-screen to save draw calls
+        if (x > W + pw || x + pw < -10) return;
+
+        let color = LANE_COLORS[p.lane];
+        if (p.state === 'hit')    color = '#fff';    // correctly sung → white flash
+        if (p.state === 'missed') color = '#1a1a1a'; // missed → dark grey
+
+        // Glow on approach (< 500 ms away)
+        if (p.state === 'upcoming' && timeUntil >= 0 && timeUntil < 500) {
+            ctx.shadowColor = color;
+            ctx.shadowBlur  = 12;
+        }
+
+        ctx.fillStyle = color;
+        drawPill(x, py, pw, ph, ph / 2);
+        ctx.fill();
+        ctx.shadowBlur = 0; // always reset shadow after each pill
+    });
+
+    // ── Hit line (dashed vertical) ─────────────────────────────────────────────
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth   = 2;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(hitX, 0);
+    ctx.lineTo(hitX, H);
+    ctx.stroke();
+    ctx.setLineDash([]); // always reset dash state
+}
+
+
+// ── STATUS BAR HELPERS ────────────────────────────────────────────────────────
+
+/**
+ * Show the status bar with a message and progress percentage.
+ * @param {string} txt - Status message
+ * @param {number} pct - Progress 0–100
+ */
+function setStatus(txt, pct) {
+    document.getElementById('status-bar').classList.add('visible');
+    document.getElementById('status-text').textContent  = txt;
+    document.getElementById('progress-fill').style.width = pct + '%';
+}
+
+/** Hide the status bar once analysis is complete. */
+function hideStatus() {
+    document.getElementById('status-bar').classList.remove('visible');
 }
 
 </script>
