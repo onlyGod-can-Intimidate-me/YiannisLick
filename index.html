@@ -406,6 +406,7 @@
     let speedMult    = 1.0;
     let isPlaying    = false;
     let isLooping    = false;
+    let activeTiming = []; // recorded timing array from admin
     let playbackEnabled = true;
     let currentCol   = -1;
 
@@ -597,30 +598,47 @@
     //  Each note column gets a pill per string note.
     //  Pill width = time until next note column.
     // ─────────────────────────────────────────────
+    // Active timing array — set when a section with recorded timing is loaded
+    let activeTiming = []; // [{ms}] — one entry per note column
+
     function buildPills() {
         pills = [];
         const stepMs = stepIntervalMs();
-        for (let ci = 0; ci < columns.length; ci++) {
-            const col = columns[ci];
-            if (col.notes.length === 0) continue;
-            // Find next note column
-            let next = ci + 1;
-            while (next < columns.length && columns[next].notes.length === 0) next++;
-            const durMs = Math.max((next - ci) * stepMs, stepMs);
+
+        // Get only columns that have notes (in order)
+        const noteCols = columns.map((col, ci) => ({ col, ci }))
+                                .filter(({ col }) => col.notes.length > 0);
+
+        noteCols.forEach(({ col, ci }, noteIdx) => {
+            // Use recorded timing if available, else fall back to BPM grid
+            const triggerMs = (activeTiming.length > noteIdx)
+                ? activeTiming[noteIdx]
+                : ci * stepMs;
+
+            // Duration = gap to next note
+            const nextTrigger = (activeTiming.length > noteIdx + 1)
+                ? activeTiming[noteIdx + 1]
+                : (noteCols[noteIdx + 1]
+                    ? (activeTiming.length > noteIdx + 1
+                        ? activeTiming[noteIdx + 1]
+                        : noteCols[noteIdx + 1].ci * stepMs)
+                    : triggerMs + stepMs);
+            const durMs = Math.max(nextTrigger - triggerMs, 150);
+
             col.notes.forEach(n => {
                 pills.push({
-                    colIndex:     ci,
-                    triggerMs:    ci * stepMs,
-                    string:       n.string,   // 1-6
-                    fret:         n.fret,
-                    note:         n.note,
-                    freq:         n.freq,
-                    durMs:        durMs,
-                    state:        'upcoming', // upcoming | hit | missed
-                    triggered:    false,
+                    colIndex:  ci,
+                    triggerMs,
+                    string:    n.string,
+                    fret:      n.fret,
+                    note:      n.note,
+                    freq:      n.freq,
+                    durMs,
+                    state:     'upcoming',
+                    triggered: false,
                 });
             });
-        }
+        });
     }
 
     // ─────────────────────────────────────────────
@@ -810,29 +828,46 @@
     function rafLoop() {
         if (!isPlaying) return;
         const elapsed = performance.now() - startTime;
-        const stepMs  = stepIntervalMs();
-        const newCol  = Math.floor(elapsed / stepMs);
 
-        // Trigger any columns we've crossed
-        for (let c = lastTriggeredCol + 1; c <= newCol && c < columns.length; c++) {
-            triggerColumn(c);
-        }
-        if (newCol > lastTriggeredCol) lastTriggeredCol = Math.min(newCol, columns.length - 1);
-
-        // Check end
-        if (elapsed / stepMs >= columns.length) {
-            if (isLooping) {
-                startTime = performance.now();
-                lastTriggeredCol = -1;
-                currentExpectedNotes = [];
-                buildPills();
-                scheduleBombs();
-                renderCanvas(0); // fresh frame with full-color pills
-                rafId = requestAnimationFrame(rafLoop);
-                return; // skip stale render below
-            } else {
-                stop();
-                return;
+        // Trigger columns — use timing array if available, else BPM grid
+        if (activeTiming.length) {
+            // Timing-based: trigger each pill when elapsed >= its triggerMs
+            pills.forEach(p => {
+                if (!p.triggered && elapsed >= p.triggerMs) {
+                    triggerColumn(p.colIndex);
+                    p.triggered = true;
+                }
+            });
+            // End check — last pill's triggerMs + durMs
+            const last = pills[pills.length - 1];
+            if (last && elapsed > last.triggerMs + last.durMs + 500) {
+                if (isLooping) {
+                    startTime = performance.now();
+                    pills.forEach(p => { p.triggered = false; p.state = 'upcoming'; });
+                    scheduleBombs();
+                    rafId = requestAnimationFrame(rafLoop);
+                    return;
+                } else { stop(); return; }
+            }
+        } else {
+            // BPM grid — original logic
+            const stepMs  = stepIntervalMs();
+            const newCol  = Math.floor(elapsed / stepMs);
+            for (let c = lastTriggeredCol + 1; c <= newCol && c < columns.length; c++) {
+                triggerColumn(c);
+            }
+            if (newCol > lastTriggeredCol) lastTriggeredCol = Math.min(newCol, columns.length - 1);
+            if (elapsed / stepMs >= columns.length) {
+                if (isLooping) {
+                    startTime = performance.now();
+                    lastTriggeredCol = -1;
+                    currentExpectedNotes = [];
+                    buildPills();
+                    scheduleBombs();
+                    renderCanvas(0);
+                    rafId = requestAnimationFrame(rafLoop);
+                    return;
+                } else { stop(); return; }
             }
         }
 
@@ -1238,6 +1273,10 @@ E|-0-1-2-3-4-5-6-7-8-9-10-11-12-|`
         const s = currentSections[idx];
         tabEditor.value = s.tab || '';
         bpm = s.bpm || 100;
+
+        // Use recorded timing if available
+        activeTiming = (s.timing && s.timing.length) ? s.timing : [];
+
         updateDisplay();
 
         // Header
@@ -1435,5 +1474,4 @@ E|-0-1-2-3-4-5-6-7-8-9-10-11-12-|`
 
     </script>
 </body>
-</html>
 </html>
