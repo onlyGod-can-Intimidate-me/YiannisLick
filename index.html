@@ -1408,7 +1408,19 @@ E|-0-1-2-3-4-5-6-7-8-9-10-11-12-|`
     function pickBuiltIn(key) {
         const song = SONGS[key];
         if (!song) return;
-        loadSong({ name: key, sections: [{ tab: song.tab, bpm: song.bpm, name: key }] });
+        bpm = song.bpm;
+        activeTiming = [];
+        tabEditor.value = song.tab;
+        parseAndRender(song.tab);
+        buildPills();
+        renderCanvas(0);
+        document.getElementById('header-song').textContent = key;
+        document.getElementById('header-section').textContent = 'Section 1 of 1';
+        document.getElementById('prev-btn').disabled = true;
+        document.getElementById('next-btn').disabled = true;
+        document.getElementById('vid-btn').disabled = true;
+        closePicker();
+        console.log('Loaded:', key, 'columns:', columns.length, 'pills:', pills.length);
     }
     window.pickBuiltIn = pickBuiltIn;
 
