@@ -434,8 +434,12 @@
     const speedBtn        = document.getElementById('speed-btn');
     const feedbackText    = document.getElementById('feedback-text');
 
-    // Hidden tab editor — still used internally but not shown to user
-    const tabEditor = { value: '' };
+    // tabEditor shim — stores tab text and triggers parse
+    const tabEditor = {
+        _val: '',
+        get value() { return this._val; },
+        set value(v) { this._val = v; }
+    };
 
     // Stubs for removed elements — keeps old code from crashing
     const stopBtn         = { disabled: false };
@@ -1274,7 +1278,9 @@ E|-0-1-2-3-4-5-6-7-8-9-10-11-12-|`
         // Use recorded timing if available
         activeTiming = (s.timing && s.timing.length) ? s.timing : [];
 
-        updateDisplay();
+        parseAndRender(tabEditor.value);
+        buildPills();
+        renderCanvas(0);
 
         // Header
         const songName = document.getElementById('header-song').dataset.name || 'GUITAR TRAINER';
