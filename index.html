@@ -38,31 +38,49 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
-        body {
-            font-family: 'Courier New', monospace;
-            padding: 10px;
+        html, body {
+            width: 100%; height: 100%;
             background: #000;
-            color: white;
-            overflow-x: hidden;
-            transition: background-color 0.15s ease;
+            color: #fff;
+            font-family: 'Courier New', monospace;
+            overflow: hidden; /* no scrolling ever */
         }
 
-        h2 { margin-bottom: 10px; font-size: 20px; text-align: center; }
-        h3 { margin-bottom: 8px; font-size: 16px; }
+        /* ── LAYOUT — full viewport, stacked vertically ── */
+        #app {
+            display: flex;
+            flex-direction: column;
+            width: 100vw;
+            height: 100vh;
+        }
 
-        /* ── CANVAS DISPLAY ── */
+        /* ── HEADER BAR ── */
+        #header-bar {
+            flex-shrink: 0;
+            background: #0a0a0a;
+            border-bottom: 1px solid #222;
+            padding: 6px 16px;
+            text-align: center;
+            font-size: 13px;
+            letter-spacing: 2px;
+            color: #888;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        #header-bar span { color: #4CAF50; }
+
+        /* ── CANVAS WRAP — takes all remaining space ── */
         #canvas-wrap {
+            flex: 1;
             position: relative;
-            margin-bottom: 15px;
-            border: 2px solid #222;
-            border-radius: 8px;
             overflow: hidden;
             background: #0a0a0a;
         }
         #guitar-canvas {
             display: block;
             width: 100%;
-            height: 300px;
+            height: 100%;
         }
         #feedback-text {
             position: absolute;
@@ -74,11 +92,113 @@
             opacity: 0; transition: opacity .1s;
         }
 
-        /* ── SPEED CONTROLS ── */
-        .speed-controls {
+        /* ── YOUTUBE OVERLAY — floats over canvas ── */
+        #yt-overlay {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 60%;
+            aspect-ratio: 16/9;
+            background: #000;
+            border: 2px solid #333;
+            border-radius: 8px;
+            overflow: hidden;
+            display: none;
+            z-index: 10;
+        }
+        #yt-overlay iframe {
+            width: 100%; height: 100%;
+            border: none;
+        }
+
+        /* ── BOTTOM BAR ── */
+        #bottom-bar {
+            flex-shrink: 0;
             display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 8px;
+            grid-template-columns: 56px 1fr 1fr 1fr 56px;
+            align-items: stretch;
+            background: #0a0a0a;
+            border-top: 1px solid #222;
+            height: 56px;
+        }
+
+        /* Arrow buttons */
+        .nav-btn {
+            background: #111;
+            border: none;
+            color: #4CAF50;
+            font-size: 22px;
+            cursor: pointer;
+            touch-action: manipulation;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-right: 1px solid #222;
+        }
+        .nav-btn:last-child { border-right: none; border-left: 1px solid #222; }
+        .nav-btn:disabled { color: #333; }
+        .nav-btn:active { background: #1a1a1a; }
+
+        /* Main buttons */
+        .action-btn {
+            border: none;
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            font-size: 13px;
+            letter-spacing: 1px;
+            cursor: pointer;
+            touch-action: manipulation;
+            border-right: 1px solid #222;
+        }
+        .action-btn:last-of-type { border-right: none; }
+        .action-btn:active { filter: brightness(1.2); }
+
+        #play-btn  { background: #4CAF50; color: #000; }
+        #speed-btn { background: #00BCD4; color: #000; }
+        #vid-btn   { background: #2196F3; color: #fff; }
+        #vid-btn.active { background: #f44336; }
+
+        /* ── SONG PICKER OVERLAY ── */
+        #picker-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.92);
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        #picker-overlay h2 {
+            text-align: center;
+            color: #4CAF50;
+            font-size: 16px;
+            letter-spacing: 3px;
+            margin-bottom: 16px;
+        }
+        .picker-song {
+            background: #111;
+            border: 2px solid #222;
+            border-radius: 8px;
+            padding: 14px 16px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            font-size: 14px;
+            color: #fff;
+        }
+        .picker-song:active { background: #1a1a1a; border-color: #4CAF50; }
+        .picker-song .artist { font-size: 11px; color: #555; margin-top: 4px; }
+        #close-picker {
+            background: #222;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 14px;
+            font-size: 14px;
+            font-family: 'Courier New', monospace;
+            cursor: pointer;
+            margin-top: 8px;
+        }
             margin-bottom: 15px;
         }
 
@@ -211,92 +331,49 @@
             margin: 0; border-radius: 0; border: none;
         }
         body.fs-mode #guitar-canvas { height: 100vh; }
-    </style>
+</style>
 </head>
 <body>
-    <button id="fs-btn" onclick="toggleFS()" title="Fullscreen">⛶</button>
-    <h2>🎸 Guitar Timing Trainer</h2>
 
-    <h3>▶️ Playing:</h3>
+<div id="app">
+
+    <!-- ── HEADER BAR ── -->
+    <div id="header-bar">
+        <span id="header-song">🎸 GUITAR TRAINER</span>
+        &nbsp;·&nbsp;
+        <span id="header-section">pick a song to begin</span>
+    </div>
+
+    <!-- ── CANVAS + OVERLAYS ── -->
     <div id="canvas-wrap">
         <canvas id="guitar-canvas"></canvas>
         <div id="feedback-text"></div>
-    </div>
 
-    <div class="speed-controls">
-        <button id="play-btn"   style="background:#4CAF50;">▶ PLAY</button>
-        <button id="sound-btn"  style="background:#00BCD4;">🔊 SOUND</button>
-        <button id="slow-btn"   style="background:#2196F3;">🐢 SLOW</button>
-        <button id="medium-btn" style="background:#FF9800;">🚶 MED</button>
-        <button id="normal-btn" style="background:#9C27B0;">🏃 FAST</button>
-        <button id="loop-btn"   style="background:#4CAF50;">🔁 LOOP</button>
-    </div>
-
-    <div id="status">
-        <span class="info-box" id="mic-status">🎤 Mic: OFF</span>
-        <span class="info-box">⏱️ Step <span id="position">0</span></span>
-        <span class="info-box">🎵 <span id="current-note">-</span></span>
-        <span class="info-box">🎤 <span id="detected-note">-</span></span>
-    </div>
-
-    <div id="controls">
-        <div class="button-group">
-            <input type="number" id="bpm-input" value="255" min="40" max="300" placeholder="BPM">
-            <button id="mic-btn">🎤 MIC</button>
-        </div>
-        <div class="button-group" style="align-items:center;">
-            <label style="color:#aaa; font-size:13px; white-space:nowrap;">🎤 Boost</label>
-            <input type="range" id="mic-gain" min="1" max="8" step="0.5" value="3"
-                style="flex:1; accent-color:#4CAF50;"
-                oninput="document.getElementById('gain-val').textContent=this.value+'x';
-                         if(window._micGainNode) window._micGainNode.gain.value=parseFloat(this.value);">
-            <span id="gain-val" style="color:#4CAF50; font-size:13px; min-width:28px;">3x</span>
-        </div>
-        <div class="button-group">
-            <button id="parse-btn">🔄 UPDATE</button>
-            <button id="stop-btn" disabled>⏹ STOP</button>
-        </div>
-        <div class="button-group single">
-            <input type="text" id="riff-name" placeholder="Name your riff...">
-        </div>
-        <div class="button-group">
-            <button id="save-btn">💾 SAVE</button>
-            <button id="load-btn">📂 LOAD</button>
+        <!-- YouTube floats over canvas -->
+        <div id="yt-overlay">
+            <iframe id="yt-iframe" src="" allowfullscreen></iframe>
         </div>
     </div>
 
-    <h3>🎵 Song Library:</h3>
-    <select id="song-picker" style="width:100%; padding:14px; font-size:15px; border-radius:8px; border:2px solid #4CAF50; background:#1a1a1a; color:white; margin-bottom:8px;">
-        <option value="">-- Pick a song --</option>
-        <option value="smoke">🎸 Smoke on the Water — Deep Purple</option>
-        <option value="sevenNation">🎸 Seven Nation Army — White Stripes</option>
-        <option value="risingSum">🎸 House of the Rising Sun — Animals (intro)</option>
-        <option value="wonderwall">🎸 Wonderwall — Oasis (intro)</option>
-        <option value="ironMan">🎸 Iron Man — Black Sabbath (riff)</option>
-        <option value="comeAsYouAre">🎸 Come As You Are — Nirvana</option>
-        <option value="pentatonic">🎼 Pentatonic Scale (beginner)</option>
-        <option value="chromatic">🎼 Chromatic Scale (beginner)</option>
-    </select>
+    <!-- ── BOTTOM BAR ── -->
+    <div id="bottom-bar">
+        <button class="nav-btn" id="prev-btn" onclick="prevSection()" disabled>◀</button>
+        <button class="action-btn" id="play-btn">▶ PLAY</button>
+        <button class="action-btn" id="speed-btn">🐢 SLOW</button>
+        <button class="action-btn" id="vid-btn" disabled onclick="toggleVideo()">📺 VIDEO</button>
+        <button class="nav-btn" id="next-btn" onclick="nextSection()" disabled>▶</button>
+    </div>
 
-    <h3>✏️ Edit Tab:</h3>
-    <textarea id="tab-editor">	E|-------------0-----------------------0-------------------2---2-------------------1---1-----------|
-	B|---------1-------1---------------1-------1-------------3---------3-------------1---------1-------|
-	G|-------2-------------0---------0-------------0-------2---------------0-------2---------------0---|
-	D|-----2-----------------------2-------------------0-----------------------3-----------------------|
-	A|-0-----------------------3-----------------------------------------------------------------------|
-	E|-------------------------------------------------------------------------------------------------|
+</div>
 
-	E|-----------0-0-----------------------0-----------------------0-----------------------0-----------|
-	B|---------1-------1----------------(0)----0---------------1-------1-----------------0-----0-------|
-	G|-------2-------------0-----------1-----------0---------2-------------0-----------1---------------|
-	D|-----2-------------------------2---------------------2-------------------------2-----------------|
-	A|-0---------------------------2-------------------0---------------------------2-------------------|
-	E|-------------------------0-----------------------------------------------0-----------------------|</textarea>
-    <button id="addbar-btn" style="background:#9C27B0; margin-bottom:8px;">➕ ADD BAR</button>
-    <button id="clear-btn">🗑️ CLEAR</button>
-    <div id="load-list"></div>
+<!-- ── SONG PICKER OVERLAY ── -->
+<div id="picker-overlay">
+    <h2>🎸 PICK A SONG</h2>
+    <div id="picker-list"></div>
+    <button id="close-picker" onclick="closePicker()" style="display:none;">✕ CLOSE</button>
+</div>
 
-    <script>
+<script>
     // ─────────────────────────────────────────────
     //  NOTE / STRING LOOKUP TABLES
     // ─────────────────────────────────────────────
@@ -353,27 +430,32 @@
     // ─────────────────────────────────────────────
     //  DOM REFS
     // ─────────────────────────────────────────────
-    const tabEditor       = document.getElementById('tab-editor');
     const playBtn         = document.getElementById('play-btn');
-    const stopBtn         = document.getElementById('stop-btn');
-    const loopBtn         = document.getElementById('loop-btn');
-    const slowBtn         = document.getElementById('slow-btn');
-    const mediumBtn       = document.getElementById('medium-btn');
-    const normalBtn       = document.getElementById('normal-btn');
-    const soundBtn        = document.getElementById('sound-btn');
-    const micBtn          = document.getElementById('mic-btn');
-    const parseBtn        = document.getElementById('parse-btn');
-    const clearBtn        = document.getElementById('clear-btn');
-    const saveBtn         = document.getElementById('save-btn');
-    const loadBtn         = document.getElementById('load-btn');
-    const riffNameInput   = document.getElementById('riff-name');
-    const loadList        = document.getElementById('load-list');
-    const bpmInput        = document.getElementById('bpm-input');
-    const micStatus       = document.getElementById('mic-status');
-    const positionSpan    = document.getElementById('position');
-    const currentNoteSpan = document.getElementById('current-note');
-    const detectedNoteSpan= document.getElementById('detected-note');
+    const speedBtn        = document.getElementById('speed-btn');
     const feedbackText    = document.getElementById('feedback-text');
+
+    // Hidden tab editor — still used internally but not shown to user
+    const tabEditor = { value: '' };
+
+    // Stubs for removed elements — keeps old code from crashing
+    const stopBtn         = { disabled: false };
+    const loopBtn         = { textContent: '', style: {} };
+    const slowBtn         = null;
+    const mediumBtn       = null;
+    const normalBtn       = null;
+    const soundBtn        = null;
+    const micBtn          = null;
+    const parseBtn        = null;
+    const clearBtn        = null;
+    const saveBtn         = null;
+    const loadBtn         = null;
+    const riffNameInput   = { value: '' };
+    const loadList        = { innerHTML: '' };
+    const bpmInput        = { value: 100 };
+    const micStatus       = { textContent: '', classList: { add:()=>{}, remove:()=>{} } };
+    const positionSpan    = { textContent: '' };
+    const currentNoteSpan = { textContent: '' };
+    const detectedNoteSpan= { textContent: '' };
 
     // ─────────────────────────────────────────────
     //  PARSE TAB → COLUMNS
@@ -811,11 +893,9 @@
     //  PLAY / STOP
     // ─────────────────────────────────────────────
     function play() {
-        if (columns.length === 0) { alert('Please update the tab first!'); return; }
+        if (columns.length === 0) { alert('Tap the header to pick a song first!'); return; }
         ensureAudioCtx();
         isPlaying = true;
-        playBtn.disabled = true;
-        stopBtn.disabled = false;
         currentCol = -1;
         lastTriggeredCol = -1;
         currentExpectedNotes = [];
@@ -829,15 +909,9 @@
     function stop() {
         isPlaying = false;
         if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
-        playBtn.disabled = false;
-        stopBtn.disabled = true;
-        currentNoteSpan.textContent   = '-';
-        detectedNoteSpan.textContent  = '-';
-        positionSpan.textContent      = '0';
-        currentExpectedNotes          = [];
+        currentExpectedNotes = [];
         activeBombs = [];
         document.body.style.backgroundColor = '#000';
-        // Draw static preview
         buildPills();
         renderCanvas(0);
     }
@@ -1149,90 +1223,217 @@ E|-0-1-2-3-4-5-6-7-8-9-10-11-12-|`
         },
     };
 
-    playBtn.addEventListener('click', play);
+    // ─────────────────────────────────────────────
+    //  SECTION NAVIGATION
+    // ─────────────────────────────────────────────
+    let currentSections = [];
+    let currentSectionIdx = 0;
+    let slowMode = false;
+    let videoVisible = false;
 
-    document.getElementById('song-picker').addEventListener('change', function() {
-        const song = SONGS[this.value];
-        if (!song) return;
-        tabEditor.value = song.tab;
-        bpmInput.value  = song.bpm;
-        bpm = song.bpm;
+    function loadSectionByIdx(idx) {
+        if (!currentSections.length) return;
+        stop();
+        currentSectionIdx = idx;
+        const s = currentSections[idx];
+        tabEditor.value = s.tab || '';
+        bpm = s.bpm || 100;
         updateDisplay();
-    });
-    stopBtn.addEventListener('click', stop);
-    micBtn.addEventListener('click', initMicrophone);
-    parseBtn.addEventListener('click', updateDisplay);
-    clearBtn.addEventListener('click', clearTab);
-    document.getElementById('addbar-btn').addEventListener('click', addBar);
 
-    function addBar() {
-        const EMPTY_BAR = '--------------------------------|';
-        const lines = tabEditor.value.split('\n').filter(l => l.trim());
-        const updated = lines.map(line => line.replace(/\|$/, '') + EMPTY_BAR);
-        tabEditor.value = updated.join('\n');
-        updateDisplay();
+        // Header
+        const songName = document.getElementById('header-song').dataset.name || 'GUITAR TRAINER';
+        document.getElementById('header-section').textContent =
+            (s.name || 'Section ' + (idx+1)) + ' — ' + (idx+1) + ' of ' + currentSections.length;
+
+        // Nav arrows
+        document.getElementById('prev-btn').disabled = idx <= 0;
+        document.getElementById('next-btn').disabled = idx >= currentSections.length - 1;
+
+        // Video button
+        const vidBtn = document.getElementById('vid-btn');
+        if (s.youtube) {
+            vidBtn.disabled = false;
+            vidBtn.dataset.url = s.youtube;
+        } else {
+            vidBtn.disabled = true;
+            vidBtn.dataset.url = '';
+            hideVideo();
+        }
     }
-    saveBtn.addEventListener('click', saveRiff);
-    loadBtn.addEventListener('click', loadRiffs);
 
-    slowBtn.addEventListener('click',   () => setSpeed(0.5,  slowBtn));
-    mediumBtn.addEventListener('click', () => setSpeed(0.75, mediumBtn));
-    normalBtn.addEventListener('click', () => setSpeed(1.0,  normalBtn));
+    function prevSection() { if (currentSectionIdx > 0) loadSectionByIdx(currentSectionIdx - 1); }
+    function nextSection() { if (currentSectionIdx < currentSections.length - 1) loadSectionByIdx(currentSectionIdx + 1); }
 
-    soundBtn.addEventListener('click', () => {
-        playbackEnabled = !playbackEnabled;
-        soundBtn.textContent = playbackEnabled ? '🔊 SOUND' : '🔇 MUTE';
-        soundBtn.style.background = playbackEnabled ? '#00BCD4' : '#666';
-    });
+    function loadSong(song) {
+        currentSections    = song.sections || [{ tab: song.tab, bpm: song.bpm, name: song.name }];
+        currentSectionIdx  = 0;
+        document.getElementById('header-song').textContent = song.name || 'GUITAR TRAINER';
+        document.getElementById('header-song').dataset.name = song.name || 'GUITAR TRAINER';
+        loadSectionByIdx(0);
+        closePicker();
+    }
 
-    loopBtn.addEventListener('click', () => {
-        isLooping = !isLooping;
-        loopBtn.textContent = isLooping ? '🔁 ON' : '🔁 OFF';
-        loopBtn.style.background = isLooping ? '#FF9800' : '#4CAF50';
-    });
-
-    bpmInput.addEventListener('change', () => {
-        bpm = parseInt(bpmInput.value) || 100;
+    // ─────────────────────────────────────────────
+    //  PLAY / PAUSE TOGGLE
+    // ─────────────────────────────────────────────
+    playBtn.addEventListener('click', () => {
         if (isPlaying) {
-            clearInterval(stepTimerId);
-            stepTimerId = setInterval(stepForward, stepIntervalMs());
+            stop();
+            playBtn.textContent = '▶ PLAY';
+            playBtn.style.background = '#4CAF50';
+        } else {
+            play();
+            playBtn.textContent = '⏸ PAUSE';
+            playBtn.style.background = '#FF9800';
         }
     });
 
-    // Init
-    initCanvas();
-    updateDisplay();
+    // Override stop to reset play button
+    const _origStop = stop;
+    function stopAndReset() {
+        _origStop();
+        playBtn.textContent = '▶ PLAY';
+        playBtn.style.background = '#4CAF50';
+    }
 
-    // ── FULLSCREEN ──
-    function toggleFS() {
-        const btn = document.getElementById('fs-btn');
-        if (!document.body.classList.contains('fs-mode')) {
-            // Enter fullscreen
-            document.body.classList.add('fs-mode');
-            btn.textContent = '✕';
-            btn.title = 'Exit fullscreen';
-            // Try native fullscreen too (Android Chrome supports it)
-            if (document.documentElement.requestFullscreen) {
-                document.documentElement.requestFullscreen().catch(() => {});
+    // ─────────────────────────────────────────────
+    //  SLOW / FAST TOGGLE
+    // ─────────────────────────────────────────────
+    document.getElementById('speed-btn').addEventListener('click', () => {
+        slowMode = !slowMode;
+        setSpeed(slowMode ? 0.5 : 1.0, null);
+        const btn = document.getElementById('speed-btn');
+        btn.textContent = slowMode ? '🏃 FAST' : '🐢 SLOW';
+        btn.style.background = slowMode ? '#9C27B0' : '#00BCD4';
+    });
+
+    // ─────────────────────────────────────────────
+    //  VIDEO TOGGLE
+    // ─────────────────────────────────────────────
+    function toggleVideo() {
+        videoVisible = !videoVisible;
+        const overlay = document.getElementById('yt-overlay');
+        const vidBtn  = document.getElementById('vid-btn');
+        if (videoVisible) {
+            const url = vidBtn.dataset.url || '';
+            // Convert YouTube watch URL to embed URL
+            const videoId = url.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/)?.[1];
+            if (videoId) {
+                document.getElementById('yt-iframe').src = `https://www.youtube.com/embed/${videoId}?autoplay=0`;
+                overlay.style.display = 'block';
+                vidBtn.textContent = '✕ HIDE';
+                vidBtn.classList.add('active');
             }
         } else {
-            // Exit fullscreen
-            document.body.classList.remove('fs-mode');
-            btn.textContent = '⛶';
-            btn.title = 'Fullscreen';
-            if (document.exitFullscreen && document.fullscreenElement) {
-                document.exitFullscreen().catch(() => {});
-            }
+            hideVideo();
         }
     }
 
-    // Also exit fs-mode if user presses Escape
-    document.addEventListener('keydown', e => {
-        if (e.key === 'Escape') {
-            document.body.classList.remove('fs-mode');
-            document.getElementById('fs-btn').textContent = '⛶';
-        }
+    function hideVideo() {
+        document.getElementById('yt-overlay').style.display = 'none';
+        document.getElementById('yt-iframe').src = '';
+        videoVisible = false;
+        const vidBtn = document.getElementById('vid-btn');
+        vidBtn.textContent = '📺 VIDEO';
+        vidBtn.classList.remove('active');
+    }
+
+    // ─────────────────────────────────────────────
+    //  SONG PICKER OVERLAY
+    // ─────────────────────────────────────────────
+    function buildPicker() {
+        const list = document.getElementById('picker-list');
+        const builtIn = [
+            { name:'Smoke on the Water', artist:'Deep Purple',   key:'smoke'       },
+            { name:'Seven Nation Army',  artist:'White Stripes', key:'sevenNation' },
+            { name:'House of the Rising Sun', artist:'Animals',  key:'risingSum'   },
+            { name:'Wonderwall',         artist:'Oasis',         key:'wonderwall'  },
+            { name:'Iron Man',           artist:'Black Sabbath', key:'ironMan'     },
+            { name:'Come As You Are',    artist:'Nirvana',       key:'comeAsYouAre'},
+            { name:'Pentatonic Scale',   artist:'Beginner',      key:'pentatonic'  },
+            { name:'Chromatic Scale',    artist:'Beginner',      key:'chromatic'   },
+        ];
+
+        list.innerHTML = builtIn.map(s => `
+            <div class="picker-song" onclick="pickBuiltIn('${s.key}')">
+                🎸 ${s.name}
+                <div class="artist">${s.artist}</div>
+            </div>
+        `).join('');
+
+        document.getElementById('close-picker').style.display = 'block';
+    }
+
+    function pickBuiltIn(key) {
+        const song = SONGS[key];
+        if (!song) return;
+        loadSong({ name: key, sections: [{ tab: song.tab, bpm: song.bpm, name: key }] });
+    }
+
+    function closePicker() {
+        document.getElementById('picker-overlay').style.display = 'none';
+    }
+
+    // Tap header to open picker
+    document.getElementById('header-bar').addEventListener('click', () => {
+        document.getElementById('picker-overlay').style.display = 'flex';
+        buildPicker();
+        loadGithubSongs();
     });
+
+    // ─────────────────────────────────────────────
+    //  GITHUB SONG LOADER
+    // ─────────────────────────────────────────────
+    const GITHUB_BASE = 'https://raw.githubusercontent.com/onlyGod-can-Intimidate-me/guitar-trainer/main/songs/';
+
+    async function loadGithubSongs() {
+        try {
+            const res = await fetch(GITHUB_BASE + 'index.json?t=' + Date.now());
+            if (!res.ok) return;
+            const index = await res.json();
+            if (!index.songs?.length) return;
+
+            const list = document.getElementById('picker-list');
+            const githubHTML = index.songs.map(s => `
+                <div class="picker-song" onclick="loadGithubSong('${s.file}')">
+                    🎸 ${s.name}
+                    <div class="artist">${s.artist || ''} · ${s.sections || '?'} sections</div>
+                </div>
+            `).join('');
+            list.innerHTML += '<div style="font-size:11px;color:#4CAF50;padding:8px 0;letter-spacing:2px;">DAD\'S SONGS</div>' + githubHTML;
+        } catch(e) { /* no songs on GitHub yet */ }
+    }
+
+    async function loadGithubSong(file) {
+        try {
+            const res  = await fetch(GITHUB_BASE + file + '?t=' + Date.now());
+            const song = await res.json();
+            loadSong(song);
+        } catch(e) { alert('Could not load: ' + e.message); }
+    }
+
+    // Check URL params for direct song link
+    async function checkUrlParams() {
+        const params   = new URLSearchParams(window.location.search);
+        const songFile = params.get('song');
+        if (songFile) {
+            try {
+                const res  = await fetch(GITHUB_BASE + songFile + '?t=' + Date.now());
+                const song = await res.json();
+                loadSong(song);
+                closePicker();
+            } catch(e) { console.log('Could not auto-load:', e.message); }
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    //  INIT
+    // ─────────────────────────────────────────────
+    initCanvas();
+    updateDisplay();
+    checkUrlParams();
+
     </script>
 </body>
+</html>
 </html>
