@@ -164,7 +164,7 @@
             inset: 0;
             background: rgba(0,0,0,0.92);
             z-index: 100;
-            display: flex;
+            display: none;
             flex-direction: column;
             padding: 20px;
             overflow-y: auto;
@@ -1406,16 +1406,17 @@ E|-0-1-2-3-4-5-6-7-8-9-10-11-12-|`
         if (!song) return;
         loadSong({ name: key, sections: [{ tab: song.tab, bpm: song.bpm, name: key }] });
     }
+    window.pickBuiltIn = pickBuiltIn;
 
     function closePicker() {
         document.getElementById('picker-overlay').style.display = 'none';
     }
+    window.closePicker = closePicker;
 
     // Tap header to open picker
     document.getElementById('header-bar').addEventListener('click', () => {
-        document.getElementById('picker-overlay').style.display = 'flex';
-        buildPicker();
-        loadGithubSongs();
+        const overlay = document.getElementById('picker-overlay');
+        overlay.style.display = overlay.style.display === 'none' ? 'flex' : 'none';
     });
 
     // ─────────────────────────────────────────────
@@ -1448,6 +1449,7 @@ E|-0-1-2-3-4-5-6-7-8-9-10-11-12-|`
             loadSong(song);
         } catch(e) { alert('Could not load: ' + e.message); }
     }
+    window.loadGithubSong = loadGithubSong;
 
     // Check URL params for direct song link
     async function checkUrlParams() {
@@ -1468,7 +1470,9 @@ E|-0-1-2-3-4-5-6-7-8-9-10-11-12-|`
     // ─────────────────────────────────────────────
     initCanvas();
     updateDisplay();
-    checkUrlParams();
+    buildPicker();        // populate song list immediately
+    loadGithubSongs();    // then try to add GitHub songs
+    checkUrlParams();     // check for ?song= param
 
     </script>
 </body>
