@@ -1,1 +1,10 @@
-
+{
+  "songs": [
+    {
+      "name": "Smoke on the Water",
+      "artist": "Deep Purple",
+      "file": "smoke-on-the-water.json",
+      "sections": 1
+    }
+  ]
+}
