@@ -29,11 +29,14 @@
  ║  coded by John Tsorotes                                   		  	        ║           
  ╚══════════════════════════════════════════════════════════════════════════════╝
 -->
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
     <title>Guitar Timing Trainer</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -330,9 +333,38 @@
             margin: 0; border-radius: 0; border: none;
         }
         body.fs-mode #guitar-canvas { height: 100vh; }
+
+        /* ── PORTRAIT WARNING ── */
+        #rotate-msg {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: #000;
+            z-index: 9999;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            font-family: 'Courier New', monospace;
+        }
+        #rotate-msg .icon { font-size: 60px; animation: rotatespin 2s infinite; }
+        #rotate-msg p { color: #4CAF50; font-size: 16px; letter-spacing: 2px; margin-top: 16px; }
+        @keyframes rotatespin {
+            0%,100% { transform: rotate(0deg); }
+            50%      { transform: rotate(90deg); }
+        }
+        @media (orientation: portrait) and (max-width: 900px) {
+            #rotate-msg { display: flex; }
+        }
 </style>
 </head>
 <body>
+
+<!-- Portrait warning — shows on mobile in portrait mode -->
+<div id="rotate-msg">
+    <div class="icon">📱</div>
+    <p>TURN YOUR PHONE<br>SIDEWAYS 🎸</p>
+</div>
 
 <div id="app">
 
@@ -1489,6 +1521,11 @@ E|-0-1-2-3-4-5-6-7-8-9-10-11-12-|`
     buildPicker();        // populate song list immediately
     loadGithubSongs();    // then try to add GitHub songs
     checkUrlParams();     // check for ?song= param
+
+    // Try to lock landscape on Android Chrome
+    if (screen.orientation && screen.orientation.lock) {
+        screen.orientation.lock('landscape').catch(() => {});
+    }
 
     </script>
 </body>
